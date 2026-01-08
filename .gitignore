@@ -47,3 +47,10 @@ data/*.gz
 # 忽略 Python 缓存
 __pycache__/
 .ipynb_checkpoints/
+mmyolo-main/data/
+mmyolo-main/work_dirs/
+mmyolo-main/*.zip
+*.tar.gz
+*.pth
+*.onnx
+VISO.zip
