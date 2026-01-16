@@ -33,7 +33,6 @@ Thumbs.db
 
 # 忽略数据集和训练结果
 datasets/
-runs/
 build/
 dist/
 ultralytics/data/
