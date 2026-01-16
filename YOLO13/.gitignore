@@ -1,0 +1,48 @@
+# 忽略所有 Python 编译缓存
+__pycache__/
+*.py[cod]
+
+# 忽略深度学习训练生成的模型文件 (因为太大了，通常存本地)
+*.pth
+*.onnx
+*.weights
+  
+
+# 忽略 C++ 编译生成的程序
+*.exe
+*.o
+*.obj
+
+# 忽略系统自动生成的文件 (比如 Mac 的缩略图缓存)
+.DS_Store
+Thumbs.db
+
+# 忽略本地编辑器配置 (可选)
+.vscode/
+.idea/
+
+
+
+*.log
+
+# 忽略权重文件
+*.pt
+*.pth
+*.onnx
+*.weights
+
+# 忽略数据集和训练结果
+datasets/
+build/
+dist/
+ultralytics/data/
+VISO/
+VisDrone/
+datasets/
+data/*.zip
+data/*.tar
+data/*.gz
+
+# 忽略 Python 缓存
+__pycache__/
+.ipynb_checkpoints/
