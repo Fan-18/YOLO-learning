@@ -18,8 +18,10 @@ results = model.train(
     workers=4,
     imgsz=1024,
 
+    patience=50, # 如果连续 50 轮效果没有改进，则提前停止训练
+
     project='/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone',
-    name='6_yolo11n_p2_VisDrone_1024',
+    name='8_yolo11n_p2_VisDrone_1024_again',
     save_json=True
     # name='test'
     # workspace=4
@@ -31,4 +33,4 @@ if __name__ == '__main__':
     model()
 
 
-# python z_train/detect_train.py | tee train_log.txt
+# python z-train/detect_train.py | tee train_log.txt

@@ -7,4 +7,6 @@ yolo11x.yaml,baseline,,,yolo11x.yaml,\,640,300,,8,auto,0.01,"56,838,574",194.5,1
 yolo11x.pt,baseline,,,yolo11x.pt,yolo11x.pt,640,300,,8,auto,0.01,,,,,,0.47,,,,,,,,,,,,,,,,,,
 mmyolov5x,baseline,,,mmyolov5x.pt,yolov5x.pt,640,300,,8,auto,0.01,,,,,,0.345
 mmYOLOv5x_p2,增加P2检测头,,,mmYOLOv5x_p2.py,YOLOv5x.pt,640,500,,,auto,0.01,,,6.836,,,0.478
-1_FFCA_YOLO_VisDrone_1024,FFCA_YOLO,,,FFCA-YOLO.yaml,yolov5s.pt,1024,300,,,,,,,,,,,,,,,,,/home/jack/11/1027/FFCA-YOLO-main/runs/train_visdrone/1_FFCA_YOLO_VisDrone_1024
+1_FFCA_YOLO_VisDrone_1024,FFCA_YOLO,,,FFCA-YOLO.yaml,yolov5s.pt,1024,300,,,,,,,,0.62193,0.50216,0.532,0.31937,,,,,,/home/jack/11/1027/FFCA-YOLO-main/runs/train_visdrone/1_FFCA_YOLO_VisDrone_1024
+6_yolo11n_p2_VisDrone_1024,增加P2检测头 (无P5),,,yolo11-p2.yaml,yolo11n.pt,1024,300,250,8,,,"884,942",8.9,6,0.538,0.439,0.455,0.282,,,,,,/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone/6_yolo11n_p2_VisDrone_1024,,0.551,0.437,0.205,0.852
+7_yolo11n_p2_FEM_VisDrone_1024,p2+FEM,,,yolo11-p2-FEM.yaml,yolo11n.pt,1024,300,,8,,,"2,584,102",6.3,3.502,0.554,0.436,0.462,0.281,,,,,,runs/VisDrone/7_yolo11n_p2_FEM_VisDrone_1024,,0.529,0.422,0.208,0.846 

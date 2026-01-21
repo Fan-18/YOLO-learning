@@ -11,6 +11,8 @@ import thop
 import torch
 import torch.nn as nn
 
+from ultralytics.nn.modules.ffca import FEM
+
 from ultralytics.nn.modules import (
     AIFI,
     C1,
@@ -1003,7 +1005,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             C2fCIB,
             A2C2f,
             DSC3k2,
-            DSConv
+            DSConv,
+            FEM
         }:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
@@ -1031,7 +1034,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 C2fCIB,
                 C2PSA,
                 A2C2f,
-                DSC3k2
+                DSC3k2,
+                FEM
             }:
                 args.insert(2, n)  # number of repeats
                 n = 1
