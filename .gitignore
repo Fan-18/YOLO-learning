@@ -6,7 +6,8 @@ __pycache__/
 *.pth
 *.onnx
 *.weights
-/runs/      # 比如 YOLOv8 自动生成的训练结果目录
+
+
 
 # 忽略 C++ 编译生成的程序
 *.exe
@@ -33,13 +34,16 @@ Thumbs.db
 
 # 忽略数据集和训练结果
 datasets/
-runs/
+
 build/
 dist/
 ultralytics/data/
 VISO/
 VisDrone/
-datasets/
+USOD/
+data/
+runs/
+
 data/*.zip
 data/*.tar
 data/*.gz
@@ -47,8 +51,8 @@ data/*.gz
 # 忽略 Python 缓存
 __pycache__/
 .ipynb_checkpoints/
-mmyolo-main/data/
-mmyolo-main/work_dirs/
+
+
 mmyolo-main/*.zip
 *.tar.gz
 *.pth

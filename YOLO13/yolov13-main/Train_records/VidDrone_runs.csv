@@ -1,0 +1,10 @@
+﻿实验 ID,改进描述 (Modification),Backbone,Neck,网络模型,预训练权重,输入分辨率,Epochs,Best_Epoch,Batch Size,优化器 (Optimizer),学习率 (lr),参数量-Params ,计算量-GFLOPs,训练用时（h）,Precision,Recall,mAP50,mAP50:95,mAP_small,推理帧率-FPS ,Context (上下文信息),Anchor 策略,损失函数,结果路径,Failed_Reason,pedestrian(AP50),people(AP50),bicycle(AP50),car(AP50),van(AP50),truck(AP50),tricycle(AP50),awning-tricycle(AP50),bus(AP50),motor(AP50)
+5_yolo11x_p2&p5_VisDrone_1024,增加P2检测头,,,yolo11-p2&p5.yaml,yolo11x.pt,1024,300,67.0,4,auto,0.01,"58,151,736",247.9,14.182,0.67203,0.58353,0.61106,0.39275,,,,,,/home/jack/11/1027/YOLO13/yolov13-main/runs/5_yolo11x_p2_VisDrone_1024,,0.724,0.594,0.438,0.907,,,,,,
+1_yolo11n.pt_VisDrone-640,baseline,,,yolo11n.pt,yolo11n.pt,640,300,282.0,8,auto,0.01,,,,0.47102,0.33975,0.35238,0.2061,,,,,,/home/jack/11/1027/YOLO13/yolov13-main/runs/1_yolo11n.pt_VisDrone-640,,,,,,,,,,,
+2_yolo11n.yaml_VisDrone-640,baseline,,,yolo11n.yaml,\,640,300,291.0,8,auto,0.01,"2,584,102",6.3,2.169,0.43197,0.33419,0.33117,0.19191,,,,,,/home/jack/11/1027/YOLO13/yolov13-main/runs/2_yolo11n.yaml_VisDrone-640,,0.352,0.277,0.0896,0.757,,,,,,
+4_yolo11n_p2&p5_VisDrone_1024,增加P2检测头,,,yolo11-p2&p5.yaml,yolo11n.pt,1024,300,216.0,8,auto,0.01,,,,0.55144,0.44548,0.46648,0.28798,,,,,,/home/jack/11/1027/YOLO13/yolov13-main/runs/4_yolo11n_p2_VisDrone_1024,,0.561,0.448,0.212,,,,,,,
+yolo11x.yaml,baseline,,,yolo11x.yaml,\,640,300,,8,auto,0.01,"56,838,574",194.5,14.660,,,0.47,,,,,,,,,,,,,,,,,,
+yolo11x.pt,baseline,,,yolo11x.pt,yolo11x.pt,640,300,,8,auto,0.01,,,,,,0.47,,,,,,,,,,,,,,,,,,
+mmyolov5x,baseline,,,mmyolov5x.pt,yolov5x.pt,640,300,,8,auto,0.01,,,,,,0.345
+mmYOLOv5x_p2,增加P2检测头,,,mmYOLOv5x_p2.py,YOLOv5x.pt,640,500,,,auto,0.01,,,6.836,,,0.478
+1_FFCA_YOLO_VisDrone_1024,FFCA_YOLO,,,FFCA-YOLO.yaml,yolov5s.pt,1024,300,,,,,,,,,,,,,,,,,/home/jack/11/1027/FFCA-YOLO-main/runs/train_visdrone/1_FFCA_YOLO_VisDrone_1024

@@ -20,6 +20,7 @@ Thumbs.db
 # 忽略本地编辑器配置 (可选)
 .vscode/
 .idea/
+runs/
 
 
 
@@ -32,12 +33,13 @@ Thumbs.db
 *.weights
 
 # 忽略数据集和训练结果
-datasets/
+
 build/
 dist/
 ultralytics/data/
 VISO/
 VisDrone/
+USDO/
 datasets/
 data/*.zip
 data/*.tar
