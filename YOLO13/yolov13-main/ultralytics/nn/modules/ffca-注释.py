@@ -74,3 +74,82 @@ class FEM(nn.Module):
         out = torch.cat((self.branch0(x), self.branch1(x), self.branch2(x)), 1)
         out = self.ConvLinear(out)
         return self.relu(out * self.scale + self.shortcut(x))
+    
+
+
+
+
+
+class Concat2(nn.Module):
+    """
+    逻辑一致性：对应 FFCA-YOLO 论文中的 CRC (Channel Reweight Concat) 模块。
+    实现 2 路输入特征的通道级可学习重权拼接，增强特征融合的表达能力。
+    """
+    def __init__(self, ch_list, dimension=1):
+        # ch_list: 由 YOLO11 的 parse_model 自动传入的输入通道数列表，例如 [128, 256]
+        super().__init__()
+        self.d = dimension      # 拼接维度，通常为 1 (通道轴)
+        self.Channel_all = sum(ch_list)  # 计算所有输入特征的总通道数
+        
+        # 初始化可学习权重参数 w，初始值全部设为 1.0 (float32 精度)
+        # nn.Parameter 确保该参数会被注册到模型中并参与反向传播优化
+        self.w = nn.Parameter(torch.ones(self.Channel_all, dtype=torch.float32), requires_grad=True)
+        self.epsilon = 1e-4     # 极小值，用于防止归一化计算时除以零
+
+    def forward(self, x):
+        # x: 输入 Tensor 列表 [x1, x2]
+        # 1. 动态获取每一路当前真实的通道数 (支持模型剪枝后的自动适配)
+        c1_real = x[0].shape[1]
+        c2_real = x[1].shape[1]
+        
+        # 2. 动态截取权重 w 并执行论文公式(9)的快速归一化 (Fast Normalized Fusion)
+        w = self.w[:(c1_real + c2_real)] 
+        weight = w / (torch.sum(w, dim=0) + self.epsilon)
+        
+        # 3. 执行通道重加权 (Reweight)
+        # 使用 .view(1, -1, 1, 1) 将 1D 权重向量升维为 4D，触发 PyTorch 广播机制
+        # 这种方式比原版的 view(N, H, W, C) 内存重排效率更高，且逻辑等价
+        x1 = x[0] * weight[:c1_real].view(1, -1, 1, 1)  # 对第 1 路特征加权
+        x2 = x[1] * weight[c1_real:].view(1, -1, 1, 1)  # 对第 2 路特征加权
+        
+        # 4. 在通道维度上进行物理拼接
+        return torch.cat([x1, x2], self.d)
+
+
+class Concat3(nn.Module):
+    """
+    逻辑一致性：对应 FFCA-YOLO 论文 CRC 模块，实现 3 路特征的通道重权拼接。
+    常用于融合 Backbone、Top-down 路径以及 Bottom-up 路径的同尺度特征。
+    """
+    def __init__(self, ch_list, dimension=1):
+        # ch_list: 3 个输入层的通道列表，例如 [64, 128, 256]
+        super().__init__()
+        self.d = dimension
+        self.Channel_all = sum(ch_list)
+        # 初始化 3 路特征所需的总权重空间
+        self.w = nn.Parameter(torch.ones(self.Channel_all, dtype=torch.float32), requires_grad=True)
+        self.epsilon = 1e-4
+
+    def forward(self, x):
+        # x: 包含 3 个 Tensor 的列表 [x1, x2, x3]
+        # 1. 动态读取输入尺寸，解决剪枝后通道数变动导致的维度冲突
+        c1 = x[0].shape[1]
+        c2 = x[1].shape[1]
+        c3 = x[2].shape[1]
+        
+        # 2. 计算归一化后的相对权重比例
+        w_active = self.w[:(c1 + c2 + c3)] 
+        weight = w_active / (torch.sum(w_active, dim=0) + self.epsilon)
+        
+        # 3. 定义切分索引，确保权重与对应的输入特征精确匹配
+        c1_end = c1
+        c2_end = c1 + c2
+
+        # 4. 广播加权运算：(N, C, H, W) * (1, C, 1, 1)
+        # 权重 weight 被逻辑上“拉伸”到与 x 的 H, W 尺寸一致，实现逐通道缩放
+        x1 = x[0] * weight[:c1_end].view(1, -1, 1, 1)         # 处理第 1 路 (如浅层特征)
+        x2 = x[1] * weight[c1_end:c2_end].view(1, -1, 1, 1)  # 处理第 2 路 (如中间融合层)
+        x3 = x[2] * weight[c2_end:].view(1, -1, 1, 1)        # 处理第 3 路 (如深层特征)
+        
+        # 5. 按照指定的维度 (dimension=1) 拼接三路特征
+        return torch.cat([x1, x2, x3], self.d)

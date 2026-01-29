@@ -1,6 +1,10 @@
 import torch
 import torch.nn as nn
-from .conv import Conv  # 确保导入了 Ultralytics 的标准卷积类
+import torch.nn.functional as F
+
+from .conv import Conv 
+from ultralytics.nn.modules.conv import autopad
+
 
 class FEM(nn.Module):
     def __init__(self, c1, c2, stride=1, scale=0.1, map_reduce=8):
@@ -44,3 +48,528 @@ class FEM(nn.Module):
         out = torch.cat((self.branch0(x), self.branch1(x), self.branch2(x)), 1)
         out = self.ConvLinear(out)
         return self.relu(out * self.scale + self.shortcut(x))
+    
+
+
+
+class FFM_Concat2(nn.Module):
+    """逻辑一致性：对应论文 CRC 模块，实现 2 路特征的通道重权拼接 (Channel Reweight Concat) """
+    def __init__(self, c1, dimension=1):
+        # c1 在 YOLO11 中会自动传入输入通道列表，例如 [128, 256]
+        super().__init__()
+        self.d = dimension
+        self.c1 = c1  # 输入通道数列表
+        self.Channel_all = sum(c1)
+        # 初始化可学习权重为 1
+        self.w = nn.Parameter(torch.ones(self.Channel_all, dtype=torch.float32), requires_grad=True)
+        self.epsilon = 0.0001 # 
+
+    def forward(self, x):
+        # x 为输入 Tensor 列表: [x1, x2]
+        # 对应论文公式 (9)：归一化权重计算 
+        # 使用 ReLU 确保权重非负（可选，但论文逻辑建议）或直接使用原逻辑
+        w = self.w
+        weight = w / (torch.sum(w, dim=0) + self.epsilon)
+        
+        # 按照各输入层的通道数进行切分并加权
+        # YOLO11 默认格式为 (N, C, H, W)，使用 view(1, -1, 1, 1) 进行广播相乘最准确
+        x1 = x[0] * weight[:self.c1[0]].view(1, -1, 1, 1)
+        x2 = x[1] * weight[self.c1[0]:].view(1, -1, 1, 1)
+        
+        return torch.cat([x1, x2], self.d)
+
+class FFM_Concat3(nn.Module):
+    """逻辑一致性：实现 3 路特征的通道重权拼接 [cite: 258]"""
+    def __init__(self, c1, dimension=1):
+        # c1 为 3 个输入层的通道列表，例如 [64, 128, 256]
+        super().__init__()
+        self.d = dimension
+        self.c1 = c1
+        self.Channel_all = sum(c1)
+        self.w = nn.Parameter(torch.ones(self.Channel_all, dtype=torch.float32), requires_grad=True)
+        self.epsilon = 0.0001
+
+    def forward(self, x):
+        # x 为输入 Tensor 列表: [x1, x2, x3]
+        weight = self.w / (torch.sum(self.w, dim=0) + self.epsilon)
+        
+        c1_end = self.c1[0]
+        c2_end = self.c1[0] + self.c1[1]
+
+        x1 = x[0] * weight[:c1_end].view(1, -1, 1, 1)
+        x2 = x[1] * weight[c1_end:c2_end].view(1, -1, 1, 1)
+        x3 = x[2] * weight[c2_end:].view(1, -1, 1, 1)
+        
+        return torch.cat([x1, x2, x3], self.d)
+    
+
+
+class Concat2(nn.Module):
+    """逻辑一致性：对应论文 CRC 模块，实现 2 路特征的通道重权拼接 (Channel Reweight Concat) """
+    def __init__(self, ch_list, dimension=1): # 把 c1 改名为 ch_list 就不纠结了
+        super().__init__()
+        self.d = dimension
+        # ch_list 就是 [C1, C2]
+        self.Channel_all = sum(ch_list) 
+        self.w = nn.Parameter(torch.ones(self.Channel_all, dtype=torch.float32), requires_grad=True)
+        self.epsilon = 0.0001
+
+    def forward(self, x):
+        # 即使 c1 在初始化时是确定的，但在 forward 里
+        # 依然建议动态获取 x[0] 和 x[1] 的通道，以确保【剪枝】后不会报错
+        c1_real = x[0].shape[1]
+        c2_real = x[1].shape[1]
+        
+        w = self.w[:(c1_real + c2_real)] # 动态截取，这才是灵魂
+        weight = w / (torch.sum(w, dim=0) + self.epsilon)
+        
+        # 使用广播机制进行加权，比原版的 view 转换快得多
+        x1 = x[0] * weight[:c1_real].view(1, -1, 1, 1)
+        x2 = x[1] * weight[c1_real:].view(1, -1, 1, 1)
+        
+        return torch.cat([x1, x2], self.d)
+
+
+    
+class Concat3(nn.Module):
+    """逻辑一致性：对应 FFCA-YOLO 论文 CRC 模块，实现 3 路特征的通道重权拼接"""
+    def __init__(self, ch_list, dimension=1):
+        # ch_list 为 3 个输入层的通道列表，由 tasks.py 自动传入，例如 [64, 128, 256]
+        super().__init__()
+        self.d = dimension
+        # 使用 ch_list 计算初始化总通道数
+        self.Channel_all = sum(ch_list)
+        # 初始化可学习权重 w
+        self.w = nn.Parameter(torch.ones(self.Channel_all, dtype=torch.float32), requires_grad=True)
+        self.epsilon = 0.0001
+
+    def forward(self, x):
+        # 1. 动态获取每一路输入的真实通道数（这一步是支持【剪枝】的关键）
+        c1 = x[0].shape[1]
+        c2 = x[1].shape[1]
+        c3 = x[2].shape[1]
+        
+        # 2. 动态截取权重 w 并进行快速归一化（与 FFM_Concat3 逻辑完全一致）
+        w_active = self.w[:(c1 + c2 + c3)] 
+        weight = w_active / (torch.sum(w_active, dim=0) + self.epsilon)
+        
+        # 3. 设置切分点，确保权重精准对应
+        c1_end = c1
+        c2_end = c1 + c2
+
+        # 4. 执行通道重加权 (使用广播机制 view(1, -1, 1, 1)，效率高于原版 view 重排)
+        # 结果与 (weight[:c1] * x[0].view(N, H, W, C)).view(N, C, H, W) 完全等价
+        x1 = x[0] * weight[:c1_end].view(1, -1, 1, 1)
+        x2 = x[1] * weight[c1_end:c2_end].view(1, -1, 1, 1)
+        x3 = x[2] * weight[c2_end:].view(1, -1, 1, 1)
+        
+        # 5. 最终特征拼接
+        return torch.cat([x1, x2, x3], self.d)
+
+
+
+class Conv_withoutBN(nn.Module):
+    """
+    不带 BatchNorm 的标准卷积模块
+    适用于：注意力机制的中间层、投影层等不需要 BN 的场景
+    """
+    default_act = nn.SiLU()  # 默认激活函数
+
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True, bias=True):
+        super().__init__()
+        # ⚠️ 修改点 1: 增加了 bias 参数并默认为 True。
+        # 在没有 BN 的情况下，卷积层通常需要偏置(bias)来学习截距，否则拟合能力会受限。
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=bias)
+        
+        # ⚠️ 修改点 2: 激活函数逻辑优化，兼容 YOLO11 写法
+        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+
+    def forward(self, x):
+        return self.act(self.conv(x))   
+    
+
+class Conv_withoutBN2(nn.Module):
+    """
+    不带 BatchNorm 的标准卷积模块
+    适用于：注意力机制的中间层、投影层等不需要 BN 的场景
+    """
+    default_act = nn.SiLU()  # 默认激活函数
+
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True, bias=False ):
+        super().__init__()
+        # ⚠️ 修改点 1: 增加了 bias 参数并默认为 True。
+        # 在没有 BN 的情况下，卷积层通常需要偏置(bias)来学习截距，否则拟合能力会受限。
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=bias)
+        
+        # ⚠️ 修改点 2: 激活函数逻辑优化，兼容 YOLO11 写法
+        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+
+    def forward(self, x):
+        return self.act(self.conv(x))   
+
+
+class SCAM(nn.Module):
+    """
+    Spatial-Channel Attention Module (SCAM) for YOLO11
+    """
+    def __init__(self, c1, c2, reduction=1):
+        """
+        初始化 SCAM 模块
+        Args:
+            c1 (int): 输入通道数
+            c2 (int): 输出通道数 (注意：SCAM 通常保持通道不变，即 c1 == c2)
+            reduction (int): 缩减比率 (逻辑保留，但当前代码强制 inter_channels = c1)
+        """
+        super().__init__()
+        # 为了保证 x + y 能相加，输入输出通道必须一致
+        # 虽然 YOLO 解析会传 c2 进来，但我们强制使用 c1 作为核心维度
+        self.in_channels = c1
+        self.inter_channels = c1  # 保持原逻辑：self.inter_channels = in_channels
+
+        # --- 定义子模块 ---
+        
+        # k: 生成 Key 向量 [N, 1, H, W] -> 用于空间 Softmax
+        # 对应原代码: self.k = Conv(in_channels, 1, 1, 1)
+        self.k = Conv(self.in_channels, 1, k=1, s=1, act=False)
+
+        # v: 生成 Value 特征 [N, C, H, W]
+        # 对应原代码: self.v = Conv(in_channels, self.inter_channels, 1, 1)
+        self.v = Conv(self.in_channels, self.inter_channels, k=1, s=1, act=False)
+
+        # m: 通道注意力混合 (无 BN)
+        # 对应原代码: self.m = Conv_withoutBN(self.inter_channels, in_channels, 1, 1)
+        # 使用 nn.Conv2d 代替，这正是 standard 1x1 conv without BN
+        # self.m = nn.Conv2d(self.inter_channels, self.in_channels, kernel_size=1, stride=1, padding=0)
+        self.m = nn.Conv2d(self.inter_channels, self.in_channels, kernel_size=1, stride=1, padding=0, bias=True)
+        '''  用BN后ap值反而降低  ''' 
+        # self.m = Conv_withoutBN(self.inter_channels, self.in_channels, k=1, s=1)
+
+        # m2: 空间注意力聚合 (2通道 -> 1通道)
+        # 对应原代码: self.m2 = Conv(2, 1, 1, 1)
+        self.m2 = Conv(2, 1, k=1, s=1)
+
+        # 池化层
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+
+    def forward(self, x):
+        """前向传播：逻辑与原版完全一致"""
+        n, c, h, w = x.size(0), x.size(1), x.size(2), x.size(3)
+
+        # ---------------- Channel Attention Branch ----------------
+        # avg max: [N, C, 1, 1] -> [N, 1, 1, C]
+        avg = self.avg_pool(x).softmax(1).view(n, 1, 1, c)
+        max = self.max_pool(x).softmax(1).view(n, 1, 1, c)
+
+        # ---------------- Spatial Attention Branch ----------------
+        # k: [N, 1, H, W] -> [N, 1, HW, 1] -> Softmax over spatial
+        k = self.k(x).view(n, 1, -1, 1).softmax(2)
+
+        # v: [N, C, H, W] -> [N, 1, C, HW]
+        v = self.v(x).view(n, 1, c, -1)
+
+        # ---------------- Fusion ----------------
+        # y: [N, 1, C, 1] -> [N, C, 1, 1] (Global Channel Context)
+        y = torch.matmul(v, k).view(n, c, 1, 1)
+
+        # y_avg / y_max: [N, 1, 1, HW] -> [N, 1, H, W] (Spatial Maps)
+        y_avg = torch.matmul(avg, v).view(n, 1, h, w)
+        y_max = torch.matmul(max, v).view(n, 1, h, w)
+
+        # y_cat: [N, 2, H, W]
+        y_cat = torch.cat((y_avg, y_max), 1)
+
+        # Final Computation: Channel Attn * Spatial Attn Mask
+        # self.m(y): [N, C, 1, 1]
+        # self.m2(y_cat): [N, 1, H, W]
+        # Broadcasting happens here
+        y = self.m(y) * self.m2(y_cat).sigmoid()
+
+        return x + y
+    
+
+# class SCAM1(nn.Module):
+#     """
+#     Spatial-Channel Attention Module (SCAM) for YOLO11
+#     """
+#     def __init__(self, c1, c2, reduction=1):
+#         """
+#         初始化 SCAM 模块
+#         Args:
+#             c1 (int): 输入通道数
+#             c2 (int): 输出通道数 (注意：SCAM 通常保持通道不变，即 c1 == c2)
+#             reduction (int): 缩减比率 (逻辑保留，但当前代码强制 inter_channels = c1)
+#         """
+#         super().__init__()
+#         # 为了保证 x + y 能相加，输入输出通道必须一致
+#         # 虽然 YOLO 解析会传 c2 进来，但我们强制使用 c1 作为核心维度
+#         self.in_channels = c1
+#         self.inter_channels = c1  # 保持原逻辑：self.inter_channels = in_channels
+
+#         # --- 定义子模块 ---
+        
+#         # k: 生成 Key 向量 [N, 1, H, W] -> 用于空间 Softmax
+#         # 对应原代码: self.k = Conv(in_channels, 1, 1, 1)
+#         self.k = Conv(self.in_channels, 1, k=1, s=1)
+
+#         # v: 生成 Value 特征 [N, C, H, W]
+#         # 对应原代码: self.v = Conv(in_channels, self.inter_channels, 1, 1)
+#         self.v = Conv(self.in_channels, self.inter_channels, k=1, s=1)
+
+#         # m: 通道注意力混合 (无 BN)
+#         # 对应原代码: self.m = Conv_withoutBN(self.inter_channels, in_channels, 1, 1)
+#         # 使用 nn.Conv2d 代替，这正是 standard 1x1 conv without BN
+#         # self.m = nn.Conv2d(self.inter_channels, self.in_channels, kernel_size=1, stride=1, padding=0)
+        
+#         # 
+#         self.m = Conv_withoutBN2(self.inter_channels, self.in_channels, k=1, s=1)
+
+#         # m2: 空间注意力聚合 (2通道 -> 1通道)
+#         # 对应原代码: self.m2 = Conv(2, 1, 1, 1)
+#         self.m2 = Conv(2, 1, k=1, s=1)
+
+#         # 池化层
+#         self.avg_pool = nn.AdaptiveAvgPool2d(1)
+#         self.max_pool = nn.AdaptiveMaxPool2d(1)
+
+#     def forward(self, x):
+#         """前向传播：逻辑与原版完全一致"""
+#         n, c, h, w = x.size(0), x.size(1), x.size(2), x.size(3)
+
+#         # ---------------- Channel Attention Branch ----------------
+#         # avg max: [N, C, 1, 1] -> [N, 1, 1, C]
+#         avg = self.avg_pool(x).softmax(1).view(n, 1, 1, c)
+#         max = self.max_pool(x).softmax(1).view(n, 1, 1, c)
+
+#         # ---------------- Spatial Attention Branch ----------------
+#         # k: [N, 1, H, W] -> [N, 1, HW, 1] -> Softmax over spatial
+#         k = self.k(x).view(n, 1, -1, 1).softmax(2)
+
+#         # v: [N, C, H, W] -> [N, 1, C, HW]
+#         v = self.v(x).view(n, 1, c, -1)
+
+#         # ---------------- Fusion ----------------
+#         # y: [N, 1, C, 1] -> [N, C, 1, 1] (Global Channel Context)
+#         y = torch.matmul(v, k).view(n, c, 1, 1)
+
+#         # y_avg / y_max: [N, 1, 1, HW] -> [N, 1, H, W] (Spatial Maps)
+#         y_avg = torch.matmul(avg, v).view(n, 1, h, w)
+#         y_max = torch.matmul(max, v).view(n, 1, h, w)
+
+#         # y_cat: [N, 2, H, W]
+#         y_cat = torch.cat((y_avg, y_max), 1)
+
+#         # Final Computation: Channel Attn * Spatial Attn Mask
+#         # self.m(y): [N, C, 1, 1]
+#         # self.m2(y_cat): [N, 1, H, W]
+#         # Broadcasting happens here
+#         y = self.m(y) * self.m2(y_cat).sigmoid()
+
+#         return x + y
+    
+
+
+"""
+DsP-YOLO：LCBHAM模块
+"""
+
+def autopad(k, p=None, d=1):  # kernel, padding 填充, dilation 扩张率
+    """YOLO工具函数: 自动计算padding以保持形状"""
+    if d > 1:
+        k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]
+    if p is None:
+        p = k // 2 if isinstance(k, int) else [x // 2 for x in k]
+    return p
+
+class LCAM(nn.Module):
+    """
+    Lightweight Channel Attention Module (LCAM)
+    论文 4.2.1 节: 通道注意力路径
+    特点: 使用 1x1 卷积代替全连接层，压缩比 r=16
+    """
+    def __init__(self, c1, ratio=16):
+        super().__init__()
+        # 降维后的通道数，最小为1防止报错
+        c_hidden = max(1, c1 // ratio)
+        
+        # 共享的多层感知机 (Shared MLP)，用 1x1 卷积实现
+        # 论文公式 (3): Conv(Relu(Conv(x)))
+        self.mlp = nn.Sequential(
+            nn.Conv2d(c1, c_hidden, 1, bias=False),
+            nn.ReLU(),
+            nn.Conv2d(c_hidden, c1, 1, bias=False)
+        )
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # 1. 全局平均池化 [cite: 310]
+        avg_out = self.mlp(F.adaptive_avg_pool2d(x, 1))
+        # 2. 全局最大池化 [cite: 305]
+        max_out = self.mlp(F.adaptive_max_pool2d(x, 1))
+        # 3. 相加并激活 [cite: 313]
+        attention = self.sigmoid(avg_out + max_out)
+        return attention
+
+class LD_SAM(nn.Module):
+    """
+    Lightweight Detail-Sensitive Spatial Attention Module (LD-SAM)
+    论文 4.2.1 节: 空间注意力路径
+    特点: 使用 3x3 卷积代替 7x7 卷积，对小目标细节更敏感
+    """
+    def __init__(self, kernel_size=3):
+        super().__init__()
+        # 论文图 4 LD-SAM 部分: Max(dim=1) 和 Mean(dim=1) 拼接后是 2 通道 [cite: 315, 321]
+        # 卷积核必须是 3x3 [cite: 319]
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=autopad(kernel_size), bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # 1. 沿通道维度的平均池化和最大池化
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        # 2. 拼接 [cite: 337]
+        x_cat = torch.cat([avg_out, max_out], dim=1)
+        # 3. 3x3 卷积 + Sigmoid [cite: 339]
+        attention = self.sigmoid(self.conv(x_cat))
+        return attention
+
+class LCBHAM(nn.Module):
+    """
+    Lightweight Channel Block Hardswish Attention Module (LCBHAM)
+    论文主要创新模块: 替换 PAN 底层的 CBS
+    结构: Conv(3x3, s=2) -> BN -> Hardswish -> LCAM -> LD-SAM
+    """
+    def __init__(self, c1, c2, k=3, s=2, p=None, g=1, d=1):
+        super().__init__()
+        # 1. 特征变换模块 [cite: 302, 303, 304]
+        # 注意：这里默认 s=2 (stride=2)，因为它是用来做下采样的
+        self.conv = nn.Sequential(
+            nn.Conv2d(c1, c2, k, s, k//2 if p is None else p, groups=g, dilation=d, bias=False),
+            nn.BatchNorm2d(c2),
+            nn.Hardswish(inplace=True) # 论文强调使用 Hardswish [cite: 264]
+        )
+        
+        # 2. 嵌入的注意力模块
+        self.lcam = LCAM(c2)    # 通道注意力
+        self.ld_sam = LD_SAM()  # 空间注意力
+
+    '''方案2：直接串行'''
+    # def forward(self, x):
+    #     # 第一步：特征变换 (Conv+BN+Hardswish)
+    #     x = self.conv(x)
+    #     # 第二步：通道注意力增强 [cite: 299]
+    #     x = x * self.lcam(x)
+    #     # 第三步：空间注意力增强 (论文图4显示是串行的)
+    #     x = x * self.ld_sam(x)
+    #     return x
+    
+    '''方案1：双分支门控机制'''
+    def forward(self, x):
+        # 0. 基础特征提取 (得到 F_org)
+        f_org = self.conv(x)    
+        
+        # 1. 通道增强分支 [对应图 4 第一个乘法节点]
+        # 一条分支去计算权重 M_ch，另一条分支与其相乘
+        m_ch = self.lcam(f_org)
+        f_ch = f_org * m_ch   # 得到中间特征 F_ch 
+        
+        # 2. 空间增强分支 [对应图 4 第二个乘法节点]
+        # 一条分支去计算权重 M_sp，另一条分支与其相乘
+        m_sp = self.ld_sam(f_ch)
+        f_out = f_ch * m_sp   # 得到最终输出 
+        
+        return f_out
+    
+
+# class LCBHAM1(nn.Module):
+#     """
+#     Lightweight Channel Block Hardswish Attention Module (LCBHAM)
+#     论文主要创新模块: 替换 PAN 底层的 CBS
+#     结构: Conv(3x3, s=2) -> BN -> Hardswish -> LCAM -> LD-SAM
+#     """
+#     def __init__(self, c1, c2, k=3, s=2, p=None, g=1, d=1):
+#         super().__init__()
+#         # 1. 特征变换模块 [cite: 302, 303, 304]
+#         # 注意：这里默认 s=2 (stride=2)，因为它是用来做下采样的
+#         self.conv = nn.Sequential(
+#             nn.Conv2d(c1, c2, k, s, k//2 if p is None else p, groups=g, dilation=d, bias=False),
+#             nn.BatchNorm2d(c2),
+#             nn.Hardswish(inplace=True) # 论文强调使用 Hardswish [cite: 264]
+#         )
+        
+#         # 2. 嵌入的注意力模块
+#         self.lcam = LCAM(c2)    # 通道注意力
+#         self.ld_sam = LD_SAM()  # 空间注意力
+
+#     '''方案2：直接串行'''
+#     def forward(self, x):
+#         # 第一步：特征变换 (Conv+BN+Hardswish)
+#         x = self.conv(x)
+#         # 第二步：通道注意力增强 [cite: 299]
+#         x = x * self.lcam(x)
+#         # 第三步：空间注意力增强 (论文图4显示是串行的)
+#         x = x * self.ld_sam(x)
+#         return x
+
+class SPDConv1(nn.Module):
+    """
+    Space-to-Depth Convolution (SPD-Conv)
+    来源: "No More Strided Convolutions" (2022)
+    作用: 替代 Stride=2 的卷积/池化，无损下采样，保留小目标特征。
+    """
+    def __init__(self, c1, c2, dimension=1):
+        super().__init__()
+        self.d = dimension
+        # 空间转深度后，通道数变为 c1 * 4 (因为宽高各减半，2*2=4)
+        # 然后通过一个卷积层融合特征，调整到目标通道数 c2
+        self.conv = nn.Conv2d(c1 * 4, c2, 3, 1, 1, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        # x shape: [B, C, H, W]
+        # 类似于 Focus 模块的切片操作
+        # 取出 (0,0), (0,1), (1,0), (1,1) 四个位置的像素
+        x0 = x[..., 0::2, 0::2] # [B, C, H/2, W/2]
+        x1 = x[..., 1::2, 0::2]
+        x2 = x[..., 0::2, 1::2]
+        x3 = x[..., 1::2, 1::2]
+        
+        # 在通道维度拼接
+        x = torch.cat([x0, x1, x2, x3], dim=1) # [B, 4*C, H/2, W/2]
+        
+        # 卷积融合
+        x = self.conv(x)
+        x = self.bn(x)
+        x = self.act(x)
+        return x
+    
+
+class SPDConv(nn.Module):
+    """
+    Space-to-Depth Convolution (SPD-Conv).
+    将空间维度转移到通道维度，实现无损下采样。
+    """
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):
+        super().__init__()
+        # c1: 输入通道, c2: 输出通道
+        # 下采样后通道数变为 c1 * 4，因此需要一个卷积层映射回 c2
+        self.conv = nn.Conv2d(c1 * 4, c2, k, s, autopad(k, p), groups=g, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+
+    def forward(self, x):
+        # 执行 space_to_depth 逻辑 (s=2 的无损下采样)
+        x = torch.cat([
+            x[..., ::2, ::2], 
+            x[..., 1::2, ::2], 
+            x[..., ::2, 1::2], 
+            x[..., 1::2, 1::2]
+        ], 1)
+        # 通过卷积层调整通道并增加非线性表达
+        return self.act(self.bn(self.conv(x)))
+
+def autopad(k, p=None):  # kernel, padding
+    if p is None:
+        p = k // 2 if isinstance(k, int) else [x // 2 for x in k]
+    return p

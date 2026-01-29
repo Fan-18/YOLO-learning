@@ -7,6 +7,16 @@ yolo11x.yaml,baseline,,,yolo11x.yaml,\,640,300,,8,auto,0.01,"56,838,574",194.5,1
 yolo11x.pt,baseline,,,yolo11x.pt,yolo11x.pt,640,300,,8,auto,0.01,,,,,,0.47,,,,,,,,,,,,,,,,,,
 mmyolov5x,baseline,,,mmyolov5x.pt,yolov5x.pt,640,300,,8,auto,0.01,,,,,,0.345
 mmYOLOv5x_p2,增加P2检测头,,,mmYOLOv5x_p2.py,YOLOv5x.pt,640,500,,,auto,0.01,,,6.836,,,0.478
-1_FFCA_YOLO_VisDrone_1024,FFCA_YOLO,,,FFCA-YOLO.yaml,yolov5s.pt,1024,300,,,,,,,,0.62193,0.50216,0.532,0.31937,,,,,,/home/jack/11/1027/FFCA-YOLO-main/runs/train_visdrone/1_FFCA_YOLO_VisDrone_1024
-6_yolo11n_p2_VisDrone_1024,增加P2检测头 (无P5),,,yolo11-p2.yaml,yolo11n.pt,1024,300,250,8,,,"884,942",8.9,6,0.538,0.439,0.455,0.282,,,,,,/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone/6_yolo11n_p2_VisDrone_1024,,0.551,0.437,0.205,0.852
+1_FFCA_YOLO_VisDrone_1024,FFCA_YOLO,,,FFCA-YOLO.yaml,yolov5s.pt,1024,300,,,,,"7,151,409",51.9,,0.62193,0.50216,0.532,0.31937,,,,,,/home/jack/11/1027/FFCA-YOLO-main/runs/train_visdrone/1_FFCA_YOLO_VisDrone_1024
+8_yolo11n_p2_VisDrone_1024,增加P2检测头 (无P5),,,yolo11-p2.yaml,yolo11n.pt,1024,300,250,8,,,"884,942",8.9,6,0.536,0.425,0.445,0.275,,,,,,/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone/6_yolo11n_p2_VisDrone_1024,,0.551,0.413,0.192,0.848
 7_yolo11n_p2_FEM_VisDrone_1024,p2+FEM,,,yolo11-p2-FEM.yaml,yolo11n.pt,1024,300,,8,,,"2,584,102",6.3,3.502,0.554,0.436,0.462,0.281,,,,,,runs/VisDrone/7_yolo11n_p2_FEM_VisDrone_1024,,0.529,0.422,0.208,0.846 
+6_yolo11n_p2_FEMv2_VisDrone_1024,p2+FEM,,,yolo11-p2-FEM.yaml,yolo11n.pt,1024,300,,8,,,"975,110",10.8,8.645,0.56,0.453,0.479,0.299,,,,,,runs/VisDrone/6_yolo11n_p2_FEMv2_VisDrone_1024,,0.578,0.459,0.238,0.862 
+9_yolo11n_p2_FEMv2_CRC_VisDrone_1024,p2+FEM+CRC,,,YOLO11-p2-FEM-CRC.yaml,yolo11n.pt,1024,300,,8,,,"984,134",10.9,9.003 ,0.541,0.451,0.469,0.295,,263.16,,,,runs/VisDrone/9_yolo11n_p2_FEMv2_CRC_VisDrone_1024,,0.57 ,0.464,0.208,0.861
+11_yolo11n_p2_FEMv2_CRC_SCAM_VisDrone_1024,p2_FEMv2_CRC_SCAM,,,yolo11-p2-FEM-CRC-SCAM.yaml,yolo11n.pt,1024,300,,8,,,"1,032,576",11.3,8.997,0.541,0.45,0.465
+12_yolo11n_p2_FEMv2_CRC_SCAM(noBN-Bias)_VisDrone_1024,p2_FEMv2_CRC_SCAM,,,,,,,,,,,"1,027,826",11.0,,,,0.46,0.283
+13_yolo11n_p2_FEMv2_CRC_SCAM(noBN-noBias)_VisDrone_1024,p2_FEMv2_CRC_SCAM1(noBias),,,,,,,,,,,"1,027,602",11.0,8.790,0.558,0.438,0.463,0.287
+14_yolo11n_p2_FEMv3_VisDrone_1024,FME接到Neck,,,yolo11-p2-FEM.yaml,yolo11n.pt,1024,300,,,,,"975,110",10.8,8.363,0.548,0.447,0.467,0.29
+15_yolo11n_p2_SCAM_VisDrone_1024,p2_SCAM,,,yolo11-p2-SCAM.yaml,yolo11n.pt,1024,300,,,,,"928,634",9.1,7.472,0.527,0.435,0.447 ,0.277,,,,,,,,0.538,0.424,0.19,0.854
+16_yolo11n_p2_LCBHAM_VisDrone_1024,p2_LCBHAM,,,yolo11-p2_LCBHAM.yaml,yolo11n.pt,1024,300,,,,,"886,130 ",8.9,7.018,0.538,0.428,0.449 ,0.276,,,,,,,,0.542,0.416,0.202 ,0.854
+17_yolo11n_p2_LCBHAM1_VisDrone_1024,p2_LCBHAM1,,,,,,,,,,,,,,,,0.446,0.273,,,,,,,,0.542,0.427,0.194 ,0.851 
+18_yolo11n_p2_FEM_LCBHAM_VisDrone_1024,p2_FEM_LCBHAM,,,yolo11-p2-FEM-LCBHAM.yaml,,,,,,,,"976,298",10.8,8.334,0.555,0.455,0.477,0.298,,,,,,,,0.577,0.459,0.228,0.863

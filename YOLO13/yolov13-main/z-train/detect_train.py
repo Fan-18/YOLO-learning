@@ -1,36 +1,56 @@
 from ultralytics import YOLO
- 
-# model = YOLO(r'ultralytics/cfg/models/v13/yolov13.yaml') 
-model = YOLO(r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/models/11/yolo11-p2.yaml')
-# model = YOLO(r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/models/11/yolo11m.yaml')
+import torch
+import numpy as np
+import random
+import os
 
-model.load("yolo11n.pt")
+# 1. 随机种子设置（保持你原有的，很好）
+def seed_everything(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
-# model.load('yolo13l.pt') # 权重文件名，官网下载
-# model.load('/home/jack/11/1027/YOLO13/yolov13-main/yolov13l.pt')
-results = model.train(
-    data=r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/datasets/VisDrone.yaml', # 数据yaml文件
+def main():
+    # 2. 在这里应用种子
+    seed_everything(42)
 
-    epochs=300,
-    batch=8,
-    device=0,
-    # lr0=0.01,  # 设置较小的学习率
-    workers=4,
-    imgsz=1024,
+    # 3. 加载模型
+    # 注意：你用 nano 的权重(pt)加载到自定义 yaml 结构中
+    # Ultralytics 会自动匹配能用的权重，不匹配的(如FEM模块)会随机初始化，这是正常的 Transfer Learning。
+    model = YOLO(r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/models/11/yolo11-p2-FEM-SPD.yaml')
+    model.load("yolo11n.pt")
 
-    patience=50, # 如果连续 50 轮效果没有改进，则提前停止训练
-
-    project='/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone',
-    name='8_yolo11n_p2_VisDrone_1024_again',
-    save_json=True
-    # name='test'
-    # workspace=4
-    # weights=r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/yolov13l.pt'
+    # 4. 训练配置
+    results = model.train(
+        data=r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/datasets/VisDrone.yaml',
+        
+        epochs=300,
+        imgsz=1024,      # VisDrone 必须大图，1024 没问题
+        
+        # --- 针对 RTX 5090 的关键修改 ---
+        batch=8,        # 建议从 64 开始尝试，如果显存还剩很多，可以加到 96 或 128
+        device=0,
+        workers=16,      # 5090 跑得快，需要更多 CPU 线程来预处理图片，防止 CPU 瓶颈
+        
+        # --- 针对实验复现 ---
+        seed=42,
+        deterministic=True,
+        
+        # --- 针对自定义模块 ---
+        amp=True,       # 如果你的 FEM 模块容易 NaN，保持 False；否则建议 True 以提速
+        
+        patience=50,
+        project='/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone',
+        name='22_yolo11n_p2_FEM_SPDv2_VisDrone_1024' # 改名标记 batch size
     )
 
-
 if __name__ == '__main__':
-    model()
-
+    # 所有的逻辑都要包在这里面！
+    main()
 
 # python z-train/detect_train.py | tee train_log.txt

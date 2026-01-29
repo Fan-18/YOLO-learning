@@ -11,7 +11,7 @@ import thop
 import torch
 import torch.nn as nn
 
-from ultralytics.nn.modules.ffca import FEM
+from ultralytics.nn.modules.ffca import (FEM, FFM_Concat2, FFM_Concat3, Concat2, Concat3, SCAM, LCBHAM, SPDConv)
 
 from ultralytics.nn.modules import (
     AIFI,
@@ -1006,7 +1006,9 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             A2C2f,
             DSC3k2,
             DSConv,
-            FEM
+            FEM,
+            LCBHAM,
+            SPDConv
         }:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
@@ -1018,6 +1020,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 )  # num heads
 
             args = [c1, c2, *args[1:]]
+
             if m in {
                 BottleneckCSP,
                 C1,
@@ -1034,8 +1037,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 C2fCIB,
                 C2PSA,
                 A2C2f,
-                DSC3k2,
-                FEM
+                DSC3k2
             }:
                 args.insert(2, n)  # number of repeats
                 n = 1
@@ -1048,6 +1050,30 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 if scale in "lx":  # for L/X sizes
                     args.append(True)
                     args.append(1.5)
+
+        elif m is Concat2:
+            c2 = sum(ch[x] for x in f)
+            args = [args[0], c2//2, c2//2]
+        elif m is Concat3:
+            c2 = sum(ch[x] for x in f)
+            args = [args[0], c2//4, c2//2, c2//4]
+        # elif m in (Concat2, Concat3):
+        #     print(f"成功识别到自定义模块: {m}")
+        #     # 这里的 f 是列表
+        #     c1 = [ch[x] for x in f]  
+        #     c2 = sum(c1)  # 拼接后的总通道数 [cite: 220]
+        #     # 这里的 args 对应 YAML 里的 [1]，我们需要把通道列表 c1 放进去
+        #     args = [c1, *args] 
+        #     # 注意：这两个模块通常重复次数 n 为 1，不需要额外处理 n
+            # ch.append(c2)
+        # elif m in (SCAM, SCAM1):
+        #     c1 = ch[f]
+        #     c2 = c1  # SCAM 默认保持通道数不变，所以输出通道 c2 等于输入 c1
+        #     args = [c1, c2, *args] # 构造参数列表，对应 SCAM(c1, c2, reduction)
+        elif m in {SCAM}:
+            c2 = ch[f]
+            args = [c2]
+
         elif m is AIFI:
             args = [ch[f], *args]
         elif m in {HGStem, HGBlock}:
