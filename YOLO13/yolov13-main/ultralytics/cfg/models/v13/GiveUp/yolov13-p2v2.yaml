@@ -1,0 +1,71 @@
+# 加带有FullPAD_Tunnel模块的P2检测头
+
+
+nc: 80 
+scales: 
+  n: [0.50, 0.25, 1024] 
+
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv,  [64, 3, 2]] # 0-P1/2
+  - [-1, 1, Conv,  [128, 3, 2, 1, 2]] # 1-P2/4
+  - [-1, 2, DSC3k2,  [256, False, 0.25]] # 2-P2特征 (64 ch)
+  - [-1, 1, Conv,  [256, 3, 2, 1, 4]] # 3-P3/8
+  - [-1, 2, DSC3k2,  [512, False, 0.25]] # 4-P3特征 (128 ch)
+  - [-1, 1, DSConv,  [512, 3, 2]] # 5-P4/16
+  - [-1, 4, A2C2f, [512, True, 4]] # 6-P4特征 (128 ch)
+  - [-1, 1, DSConv,  [1024, 3, 2]] # 7-P5/32
+  - [-1, 4, A2C2f, [1024, True, 1]] # 8-P5特征 (256 ch)
+
+head:
+  - [[4, 6, 8], 2, HyperACE, [512, 8, True, True, 0.5, 1, "both"]] # 9 (128 ch)
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 10 (128 ch, P3分辨率)
+  - [ 9, 1, DownsampleConv, []] # 11 (256 ch, P5分辨率)
+  - [10, 1, nn.Upsample, [None, 2, "nearest"]] # 12 (128 ch, P2分辨率)
+
+  # --- 修正层：在隧道前对齐通道 ---
+  - [12, 1, Conv, [256, 1, 1]]       # 13 (将128ch降为64ch，以匹配Backbone P2)
+
+  # --- 第一组：初始特征隧道 ---
+  - [[6, 9], 1, FullPAD_Tunnel, []]  # 14 (P4: 128 vs 128)
+  - [[4, 10], 1, FullPAD_Tunnel, []] # 15 (P3: 128 vs 128)
+  - [[8, 11], 1, FullPAD_Tunnel, []] # 16 (P5: 256 vs 256)
+  - [[2, 13], 1, FullPAD_Tunnel, []] # 17 (P2: 64 vs 64) 解决第一个报错点
+
+  # --- 自上而下路径 ---
+  - [16, 1, nn.Upsample, [None, 2, "nearest"]] # 18
+  - [[-1, 14], 1, Concat, [1]] # 19
+  - [-1, 2, DSC3k2, [512, True]] # 20 (128 ch)
+  - [[-1, 9], 1, FullPAD_Tunnel, []] # 21 (P4回归隧道)
+
+  - [20, 1, nn.Upsample, [None, 2, "nearest"]] # 22
+  - [[-1, 15], 1, Concat, [1]] # 23
+  - [-1, 2, DSC3k2, [256, True]] # 24 (64 ch)
+  - [10, 1, Conv, [256, 1, 1]] # 25 (将128ch降为64ch，匹配第24层)
+  - [[24, 25], 1, FullPAD_Tunnel, []] # 26 (P3回归隧道)
+
+  # 新增 P2 路径
+  - [24, 1, nn.Upsample, [None, 2, "nearest"]] # 27
+  - [[-1, 17], 1, Concat, [1]] # 28
+  - [-1, 2, DSC3k2, [128, True]] # 29 (32 ch)
+  - [13, 1, Conv, [128, 1, 1]] # 30 (将64ch降为32ch，匹配第29层)
+  - [[29, 30], 1, FullPAD_Tunnel, []] # 31 (P2最终输出)
+
+  # --- 自下而上回归路径 ---
+  - [29, 1, DownsampleConv, []] # 32 (32 -> 64 ch)
+  - [[-1, 26], 1, Concat, [1]] # 33 (64+64 = 128 ch)
+  - [-1, 2, DSC3k2, [512, True]] # 34 (修正点：将256改为512，对齐第10层的128ch)
+  - [[-1, 10], 1, FullPAD_Tunnel, []] # 35 (P3最终输出)
+
+  - [34, 1, DownsampleConv, []] # 36 (128 -> 256 ch)
+  - [[-1, 21], 1, Concat, [1]] # 37
+  - [-1, 2, DSC3k2, [512, True]] # 38 (128 ch)
+  - [[-1, 9], 1, FullPAD_Tunnel, []] # 39 (P4最终输出)
+
+  - [38, 1, DownsampleConv, []] # 40 (128 -> 256 ch)
+  - [[-1, 16], 1, Concat, [1]] # 41
+  - [-1, 2, DSC3k2, [1024, True]] # 42 (256 ch)
+  - [[-1, 11], 1, FullPAD_Tunnel, []] # 43 (P5最终输出)
+
+  # --- 检测头 ---
+  - [[31, 35, 39, 43], 1, Detect, [nc]] # Detect(P2, P3, P4, P5)

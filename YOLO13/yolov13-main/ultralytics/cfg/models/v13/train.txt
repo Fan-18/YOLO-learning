@@ -1,0 +1,5 @@
+# Terminal 2
+tail --pid=1711314 -f /dev/null && \
+echo "开始运行 Train ..." && \
+python z-train/detect_train2.py && \
+touch t2_done

@@ -1,9 +1,78 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
-from .conv import Conv 
-from ultralytics.nn.modules.conv import autopad
+from ultralytics.nn.modules.conv import autopad, Conv 
+
+
+# 定义 SimAM 无参注意力模块 (即插即用，不增加参数量)
+class SimAM(nn.Module):
+    def __init__(self, e_lambda=1e-4):
+        super(SimAM, self).__init__()
+        self.activaton = nn.Sigmoid()
+        self.e_lambda = e_lambda
+
+    def forward(self, x):
+        b, c, h, w = x.size()
+        n = w * h - 1
+        x_minus_mu_square = (x - x.mean(dim=[2, 3], keepdim=True)).pow(2)
+        y = x_minus_mu_square / (4 * (x_minus_mu_square.sum(dim=[2, 3], keepdim=True) / n + self.e_lambda)) + 0.5
+        return x * self.activaton(y)
+
+class FEM_v2(nn.Module):
+    def __init__(self, c1, c2, stride=1, scale=0.1, map_reduce=8):
+        super(FEM_v2, self).__init__()
+        self.scale = scale
+        inter_planes = c1 // map_reduce
+
+        # 1. 使用 SiLU 替换 ReLU，与 YOLO11 保持一致
+        self.act = nn.SiLU() 
+        
+        # 分支0：基础特征 (保持不变)
+        self.branch0 = nn.Sequential(
+            Conv(c1, 2 * inter_planes, 1, stride, act=self.act),
+            Conv(2 * inter_planes, 2 * inter_planes, 3, 1, act=False)
+        )
+        
+        # 分支1：中等感受野 (修改：Dilation=3)
+        self.branch1 = nn.Sequential(
+            Conv(c1, inter_planes, 1, 1, act=self.act),
+            Conv(inter_planes, (inter_planes // 2) * 3, (1, 3), stride, p=(0, 1), act=self.act),
+            Conv((inter_planes // 2) * 3, 2 * inter_planes, (3, 1), 1, p=(1, 0), act=self.act),
+            # 改进：Dilation 从 5 改为 3，填充改为 3
+            nn.Conv2d(2 * inter_planes, 2 * inter_planes, 3, 1, padding=3, dilation=3, bias=False),
+            nn.BatchNorm2d(2 * inter_planes)
+        )
+        
+        # 分支2：大感受野 (保持 Dilation=5)
+        self.branch2 = nn.Sequential(
+            Conv(c1, inter_planes, 1, 1, act=self.act),
+            Conv(inter_planes, (inter_planes // 2) * 3, (3, 1), stride, p=(1, 0), act=self.act),
+            Conv((inter_planes // 2) * 3, 2 * inter_planes, (1, 3), 1, p=(0, 1), act=self.act),
+            nn.Conv2d(2 * inter_planes, 2 * inter_planes, 3, 1, padding=5, dilation=5, bias=False),
+            nn.BatchNorm2d(2 * inter_planes)
+        )
+
+        # 2. 融合层
+        self.ConvLinear = Conv(6 * inter_planes, c2, 1, 1, act=False)
+        self.shortcut = Conv(c1, c2, 1, stride, act=False)
+        
+        # 3. 引入 SimAM 注意力，增强多尺度特征融合
+        self.attention = SimAM()
+
+    def forward(self, x):
+        # 拼接三个分支
+        cat_out = torch.cat((self.branch0(x), self.branch1(x), self.branch2(x)), 1)
+        
+        # 经过线性层压缩
+        out = self.ConvLinear(cat_out)
+        
+        # 注意力加权 (这是新增的，让网络知道哪个 dilation 分支更重要)
+        out = self.attention(out)
+        
+        # 残差连接 (使用 SiLU)
+        return self.act(out * self.scale + self.shortcut(x))
 
 
 class FEM(nn.Module):
@@ -373,13 +442,7 @@ class SCAM(nn.Module):
 DsP-YOLO：LCBHAM模块
 """
 
-def autopad(k, p=None, d=1):  # kernel, padding 填充, dilation 扩张率
-    """YOLO工具函数: 自动计算padding以保持形状"""
-    if d > 1:
-        k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]
-    if p is None:
-        p = k // 2 if isinstance(k, int) else [x // 2 for x in k]
-    return p
+
 
 class LCAM(nn.Module):
     """
@@ -511,65 +574,303 @@ class LCBHAM(nn.Module):
 #         x = x * self.ld_sam(x)
 #         return x
 
-class SPDConv1(nn.Module):
+class SPDConv(nn.Module):
     """
     Space-to-Depth Convolution (SPD-Conv)
     来源: "No More Strided Convolutions" (2022)
     作用: 替代 Stride=2 的卷积/池化，无损下采样，保留小目标特征。
     """
-    def __init__(self, c1, c2, dimension=1):
-        super().__init__()
-        self.d = dimension
-        # 空间转深度后，通道数变为 c1 * 4 (因为宽高各减半，2*2=4)
-        # 然后通过一个卷积层融合特征，调整到目标通道数 c2
-        self.conv = nn.Conv2d(c1 * 4, c2, 3, 1, 1, bias=False)
-        self.bn = nn.BatchNorm2d(c2)
-        self.act = nn.SiLU()
+    def __init__(self, c1, c2, k=3, s=1, p=None, g=1, act=True):
 
-    def forward(self, x):
-        # x shape: [B, C, H, W]
-        # 类似于 Focus 模块的切片操作
-        # 取出 (0,0), (0,1), (1,0), (1,1) 四个位置的像素
-        x0 = x[..., 0::2, 0::2] # [B, C, H/2, W/2]
-        x1 = x[..., 1::2, 0::2]
-        x2 = x[..., 0::2, 1::2]
-        x3 = x[..., 1::2, 1::2]
-        
-        # 在通道维度拼接
-        x = torch.cat([x0, x1, x2, x3], dim=1) # [B, 4*C, H/2, W/2]
-        
-        # 卷积融合
-        x = self.conv(x)
-        x = self.bn(x)
-        x = self.act(x)
-        return x
+        super().__init__()
     
-
-class SPDConv(nn.Module):
-    """
-    Space-to-Depth Convolution (SPD-Conv).
-    将空间维度转移到通道维度，实现无损下采样。
-    """
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):
-        super().__init__()
-        # c1: 输入通道, c2: 输出通道
-        # 下采样后通道数变为 c1 * 4，因此需要一个卷积层映射回 c2
-        self.conv = nn.Conv2d(c1 * 4, c2, k, s, autopad(k, p), groups=g, bias=False)
+        # 这里的 k, s, p 是为了兼容 YAML 的传参
+        # 核心逻辑不变：输入通道翻 4 倍
+        self.conv = nn.Conv2d(c1 * 4, c2, k, s, autopad(k, p), groups=g, bias=False) 
         self.bn = nn.BatchNorm2d(c2)
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, x):
-        # 执行 space_to_depth 逻辑 (s=2 的无损下采样)
-        x = torch.cat([
-            x[..., ::2, ::2], 
-            x[..., 1::2, ::2], 
-            x[..., ::2, 1::2], 
-            x[..., 1::2, 1::2]
-        ], 1)
-        # 通过卷积层调整通道并增加非线性表达
+        # x shape: [B, C, H, W]
+        # # 类似于 Focus 模块的切片操作
+        # # 取出 (0,0), (0,1), (1,0), (1,1) 四个位置的像素
+        # x0 = x[..., 0::2, 0::2] # [B, C, H/2, W/2]
+        # x1 = x[..., 1::2, 0::2]
+        # x2 = x[..., 0::2, 1::2]
+        # x3 = x[..., 1::2, 1::2]
+        
+        # 在通道维度拼接
+        x = torch.cat([x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]], 1)
+        
         return self.act(self.bn(self.conv(x)))
+    
 
-def autopad(k, p=None):  # kernel, padding
-    if p is None:
-        p = k // 2 if isinstance(k, int) else [x // 2 for x in k]
-    return p
+# class SPDConv1(nn.Module):
+#     """
+#     v2  弃用
+#     Space-to-Depth Convolution (SPD-Conv).
+#     将空间维度转移到通道维度，实现无损下采样。
+#     """
+#     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):
+#         super().__init__()
+#         # c1: 输入通道, c2: 输出通道
+#         # 下采样后通道数变为 c1 * 4，因此需要一个卷积层映射回 c2
+#         self.conv = nn.Conv2d(c1 * 4, c2, k, s, autopad(k, p), groups=g, bias=False)
+#         self.bn = nn.BatchNorm2d(c2)
+#         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+
+#     def forward(self, x):
+#         # 执行 space_to_depth 逻辑 (s=2 的无损下采样)
+#         x = torch.cat([
+#             x[..., ::2, ::2], 
+#             x[..., 1::2, ::2], 
+#             x[..., ::2, 1::2], 
+#             x[..., 1::2, 1::2]
+#         ], 1)
+#         # 通过卷积层调整通道并增加非线性表达
+#         return self.act(self.bn(self.conv(x)))
+
+
+
+
+
+# ==========================================
+# 1. CA / CSHA / MGFAB (保持不变)
+# ==========================================
+class CA(nn.Module):
+    def __init__(self, in_channel, rate=4):
+        super(CA, self).__init__()
+        self.in_channel = in_channel
+        self.mid_ch = max(1, int(in_channel / rate))
+        self.cov1 = Conv(in_channel, self.mid_ch, 1)
+        self.cov2 = Conv(self.mid_ch, in_channel, 1)
+        self.act2 = nn.Sigmoid()
+        self.pool = nn.AdaptiveAvgPool2d(1)
+    def forward(self, x):
+        x_ = self.cov2(self.cov1(x))
+        weight = self.act2(self.pool(x_))
+        return x * weight
+
+class CSHA(nn.Module):
+    def __init__(self, in_channel=128, rate=4, hw=None):
+        super(CSHA, self).__init__()
+        self.ca = CA(in_channel=in_channel, rate=rate)
+        self.sa = nn.Sequential(Conv(in_channel, in_channel, k=3), Conv(in_channel, in_channel, k=3))
+    def forward(self, x):
+        x1 = self.ca(x)
+        return self.sa(x1) + x1
+
+class MGFAB(nn.Module):
+    def __init__(self, c1, c2, hw=[40, 40]):
+        super().__init__()
+        self.c1 = c1
+        self.c2 = c2
+        self.c_half = c1 // 2 
+        self.csha = CSHA(in_channel=self.c_half, rate=4, hw=hw)
+        c_concat = (c1 - self.c_half) + self.c_half + self.c_half
+        self.conv2 = Conv(c_concat, c2, 1)
+    def forward(self, x):
+        x0, x1 = torch.split(x, [self.c1 - self.c_half, self.c_half], dim=1)
+        x2 = self.csha(x1)
+        return self.conv2(torch.cat([x0, x1, x2], dim=1))
+
+# ==========================================
+# 2. CrossAttention (关键修复: Query下采样策略)
+# ==========================================
+class CrossAttention(nn.Module):
+    def __init__(self, c1, c2, n=1, emb_dim=256, patch_size=[8, 8], feature_size=None, dropout=0.1, num_heads=8):
+        super().__init__()
+        self.num_heads = num_heads
+        self.patch_size = patch_size
+        self.emb_dim = emb_dim
+        self.dropout = nn.Dropout(dropout)
+        
+        # [关键修复] Query 处理: 必须与 patch_size 对齐
+        # 使用 AvgPool 代替 stride conv，确保网格大小一致
+        self.query_pool = nn.AvgPool2d(tuple(patch_size))
+        self.query_proj = nn.Linear(c1, emb_dim, bias=False)
+        
+        # Key & Value 投影
+        self.key = nn.Linear(c2, emb_dim, bias=False)
+        self.value = nn.Linear(c2, emb_dim, bias=False)
+        
+        self.pool = nn.AvgPool2d(tuple(patch_size))
+
+    def forward(self, x1, x2):
+        # x1: Query (Shallow/Large), x2: Key (Deep/Small)
+        b, c1, h1, w1 = x1.shape
+        _, c2, h2, w2 = x2.shape
+        ph, pw = self.patch_size
+        num_patch_h_q, num_patch_w_q = h1 // ph, w1 // pw
+
+        # --- 1. Key & Value (来自 x2) ---
+        x_pool = self.pool(x2) # Downsample Key/Value
+        x_flat = x_pool.view(b, c2, -1).transpose(1, 2) # [b, num_patch, c2]
+
+        k = self.key(x_flat).view(b, -1, self.num_heads, self.emb_dim // self.num_heads).transpose(1, 2)
+        v = self.value(x_flat).view(b, -1, self.num_heads, self.emb_dim // self.num_heads).transpose(1, 2)
+
+        # --- 2. Query (来自 x1) [修复点] ---
+        # 同样使用 pool 进行下采样，确保 patches 数量与 reshape 预期一致
+        q_pool = self.query_pool(x1) 
+        q_flat = q_pool.view(b, c1, -1).transpose(1, 2)
+        q = self.query_proj(q_flat).view(b, -1, self.num_heads, self.emb_dim // self.num_heads).transpose(1, 2)
+
+        # --- 3. Attention ---
+        d_k = q.shape[-1]
+        score = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(d_k)
+        weights = self.dropout(torch.softmax(score, dim=-1))
+        
+        y = torch.matmul(weights, v) # [b, heads, num_q, d_head]
+        
+        # --- 4. 重组 ---
+        y = y.transpose(1, 2).contiguous().view(b, num_patch_h_q, num_patch_w_q, self.emb_dim)
+        y = y.permute(0, 3, 1, 2) # [b, c, h, w]
+        
+        # 上采样回原始分辨率
+        out = torch.nn.functional.interpolate(y, size=(h1, w1), mode='bilinear', align_corners=False)
+        return out
+
+# ==========================================
+# 3. CSFA (适配层)
+# ==========================================
+class CSFA(nn.Module):
+    def __init__(self, c1, c2, n=1, hw=[40, 40], patch_size=[4, 4]):
+        super().__init__()
+        ch_deep, ch_shallow = c1 
+        
+        # MGFAB: 处理 Deep 特征
+        self.up = nn.Upsample(scale_factor=2, mode="nearest")
+        self.mgfab = MGFAB(ch_deep, ch_deep, hw=hw) 
+        
+        # CrossAttention: 
+        # Query=Shallow(x2), Key=Deep(x1)
+        # [关键设置] emb_dim = ch_deep (128)
+        # 这样 Attention 的输出通道就是 128，可以和 MGFAB 拼接
+        self.cross_attention = CrossAttention(
+            c1=ch_shallow, c2=ch_deep, n=n, 
+            emb_dim=ch_deep, # 强制输出通道为 Deep 通道数
+            patch_size=patch_size, feature_size=hw
+        )
+        
+        depth = 1 if patch_size[0] < 5 else 2
+        # 输入 ch_deep, 输出 ch_deep
+        self.conv3 = nn.Sequential(*[
+            Conv(ch_deep, ch_deep, 3) for _ in range(depth)
+        ])
+        
+        # 最终融合: ch_deep + ch_deep -> c2
+        self.final_conv = Conv(ch_deep + ch_deep, c2, 1)
+
+    def forward(self, x):
+        x1, x2 = x # x1:Deep, x2:Shallow
+        
+        # Branch 1
+        x1_up = self.up(x1)
+        x1_out = self.mgfab(x1_up)
+        
+        # Branch 2 (Shallow 查询 Deep)
+        x2_att = self.cross_attention(x2, x1)
+        x2_out = self.conv3(x2_att) + x2_att 
+        
+        return self.final_conv(torch.cat([x1_out, x2_out], dim=1))
+    
+
+# ----------------- 辅助函数与基础卷积 -----------------
+def transpose_qkv(X, num_heads):
+    """为了多注意力头的并行计算而变换形状"""
+    X = X.reshape(X.shape[0], X.shape[1], num_heads, -1)
+    X = X.permute(0, 2, 1, 3)
+    return X.reshape(-1, X.shape[2], X.shape[3])
+
+
+
+# ----------------- 适配后的 PatchAttention -----------------
+class PatchAttention(nn.Module):
+    """
+    改编适配 YOLO11 的 PatchAttention 模块
+    Args:
+        c1 (list): [c_low, c_high] 输入通道列表
+        c2 (int): 输出通道 (通常等于 c_low)
+        patch_size (int or list): Patch 大小，默认为 [16, 16]
+        emb_dim (int): 嵌入维度
+        num_heads (int): 注意力头数
+        dropout (float): Dropout 比率
+    """
+    def __init__(self, c1, c2, patch_size=[16, 16], emb_dim=256, num_heads=8, dropout=0.1):
+        super().__init__()
+        # c1 是列表 [c_low, c_high]
+        if isinstance(c1, list):
+            c_low, c_high = c1[0], c1[1]
+        else:
+            c_low, c_high = c1, c1
+            
+        if isinstance(patch_size, int):
+            patch_size = [patch_size, patch_size]
+            
+        self.num_heads = num_heads
+        self.path_size = patch_size
+        
+        # --- 修改点：直接使用 Ultralytics 的 Conv 模块 ---
+        # 这里的 Conv 包含了 Conv2d + BatchNorm + SiLU
+        self.query = Conv(c_high, emb_dim, k=3, s=2) 
+        # ----------------------------------------------
+        
+        self.key = nn.Linear(c_low, emb_dim, bias=False)
+        self.pool = nn.AvgPool2d(tuple(patch_size), stride=tuple(patch_size))
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # x: [x_low, x_high]
+        x_low, x_high_level = x[0], x[1]
+        
+        b, c, h, w = x_low.shape
+        
+        # 动态计算 Patch 数量
+        patch_h_num = h // self.path_size[0]
+        patch_w_num = w // self.path_size[1]
+
+        # 1. Value 处理 (切分 Patch)
+        x1 = x_low.view(b, self.num_heads, -1, h, w)
+        x1 = x1.view(-1, x1.shape[2], h, w)
+        patch_h_list = list(torch.split(x1, self.path_size[0], dim=2))
+        patch_list = [torch.split(tensor, self.path_size[1], dim=3) for tensor in patch_h_list]
+        value = torch.stack([j.flatten(start_dim=1) for i in patch_list for j in i], dim=1)
+
+        # 2. Key 处理
+        x_ = self.pool(x_low)
+        x_ = x_.view(b, c, -1).transpose(1, 2)
+        key = self.key(x_)
+        key = transpose_qkv(key, num_heads=self.num_heads)
+
+        # 3. Query 处理 (使用官方 Conv)
+        query_feat = self.query(x_high_level) 
+        query = query_feat.flatten(start_dim=2).transpose(1, 2)
+        query = transpose_qkv(query, self.num_heads)
+
+        # 4. Attention 计算
+        d = query.shape[-1]
+        score = torch.bmm(query, key.transpose(1, 2)) / math.sqrt(d)
+        weights = score.softmax(dim=-1)
+        y = torch.bmm(self.dropout(weights), value)
+
+        # 5. 重组输出
+        out_patches = torch.split(y, 1, dim=1)
+        out_patches = [
+            patch.squeeze(1)
+            .view(b, self.num_heads, -1)
+            .reshape(b, self.num_heads, -1, self.path_size[0], self.path_size[1]) 
+            for patch in out_patches
+        ]
+        out_patches = [
+            patch.reshape(b, -1, self.path_size[0], self.path_size[1]) 
+            for patch in out_patches
+        ]
+        
+        temp = []
+        for i in range(patch_h_num):
+            row_patches = out_patches[i * patch_w_num : (i + 1) * patch_w_num]
+            temp.append(torch.cat(row_patches, dim=3))
+        
+        out = torch.cat(temp, dim=2)
+        return out

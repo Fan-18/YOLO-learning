@@ -11,7 +11,8 @@ import thop
 import torch
 import torch.nn as nn
 
-from ultralytics.nn.modules.ffca import (FEM, FFM_Concat2, FFM_Concat3, Concat2, Concat3, SCAM, LCBHAM, SPDConv)
+from ultralytics.nn.modules.head import  Detect_SmallObj 
+from ultralytics.nn.modules.ffca import (FEM, FFM_Concat2, FFM_Concat3, Concat2, Concat3, SCAM, LCBHAM, SPDConv, CSFA, PatchAttention )
 
 from ultralytics.nn.modules import (
     AIFI,
@@ -969,7 +970,23 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 with contextlib.suppress(ValueError):
                     args[j] = locals()[a] if a in locals() else ast.literal_eval(a)
         n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
-        if m in {
+
+        if m is CSFA:
+            # 关键修改：处理多输入 f=[idx1, idx2]
+            # ch[x] for x in f 会分别取出两个输入层的通道数，生成列表 [ch_deep, ch_shallow]
+            c1 = [ch[x] for x in f]  
+            
+            # 获取输出通道 c2
+            c2 = args[0]
+            # 确保通道数符合 YOLO 缩放规则 (可选，但在 5090 上建议加上以防不对齐)
+            if c2 != nc:
+                c2 = make_divisible(min(c2, max_channels) * width, 8)
+
+            # 重新封装参数: [c1_list, c2, n, hw, patch_size]
+            # 注意：args[1:] 包含了 n, hw, patch_size 等后续参数
+            args = [c1, c2, *args[1:]]
+            
+        elif m in {
             Classify,
             Conv,
             ConvTranspose,
@@ -1051,6 +1068,17 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                     args.append(True)
                     args.append(1.5)
 
+        # ▼▼▼▼▼▼▼▼▼▼ PatchAttention ▼▼▼▼▼▼▼▼▼▼▼
+        elif m is PatchAttention:
+            # f 是来源层列表，例如 [3, 10]
+            # 获取输入通道列表 [c_low, c_high]
+            c1 = [ch[x] for x in f]
+            # 输出通道 = 低层特征通道 (c_low)
+            c2 = c1[0]
+            # 重组参数: [c1, c2, patch_size, emb_dim, ...]
+            args = [c1, c2, *args]
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
         elif m is Concat2:
             c2 = sum(ch[x] for x in f)
             args = [args[0], c2//2, c2//2]
@@ -1088,11 +1116,11 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect}:
+        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect, Detect_SmallObj}:
             args.append([ch[x] for x in f])
             if m is Segment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
-            if m in {Detect, Segment, Pose, OBB}:
+            if m in {Detect, Segment, Pose, OBB, Detect_SmallObj}:
                 m.legacy = legacy
         elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
             args.insert(1, [ch[x] for x in f])

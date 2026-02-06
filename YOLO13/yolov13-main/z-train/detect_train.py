@@ -22,7 +22,10 @@ def main():
     # 3. 加载模型
     # 注意：你用 nano 的权重(pt)加载到自定义 yaml 结构中
     # Ultralytics 会自动匹配能用的权重，不匹配的(如FEM模块)会随机初始化，这是正常的 Transfer Learning。
-    model = YOLO(r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/models/11/yolo11-p2-FEM-SPD.yaml')
+    # model = YOLO(r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/models/v13/yolov13-p2-nop5v2.yaml')
+
+    # model = YOLO(r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/models/11/yolo11-p2-FEM-SPDv2.yaml')
+    model = YOLO('/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone/30_yolo11n_p2_FEM_SPD_yamlv2_det_VisDrone_1024_bc8/weights/best.pt')
     model.load("yolo11n.pt")
 
     # 4. 训练配置
@@ -39,14 +42,20 @@ def main():
         
         # --- 针对实验复现 ---
         seed=42,
-        deterministic=True,
+        # deterministic=True,
         
         # --- 针对自定义模块 ---
         amp=True,       # 如果你的 FEM 模块容易 NaN，保持 False；否则建议 True 以提速
         
+        resume=True,   # 从上次中断处继续训练
+
         patience=50,
         project='/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone',
-        name='22_yolo11n_p2_FEM_SPDv2_VisDrone_1024' # 改名标记 batch size
+        # project='/home/jack/11/1027/YOLO13/yolov13-main/runs/YOLOv13_VisDrone',
+
+        name='30_yolo11n_p2_FEM_SPD_yamlv2_det_VisDrone_1024_bc8' # 改名标记 batch size
+
+        
     )
 
 if __name__ == '__main__':

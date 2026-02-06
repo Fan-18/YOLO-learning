@@ -3,6 +3,7 @@
 #-------------------------------------#
 import datetime
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 from functools import partial
 
 import numpy as np
@@ -50,7 +51,7 @@ if __name__ == "__main__":
     #   Seed    用于固定随机种子
     #           使得每次独立训练都可以获得一样的结果
     #----------------------------------------------#
-    seed            = 11
+    seed            = 42
     #---------------------------------------------------------------------#
     #   distributed     用于指定是否使用单机多卡分布式运行
     #                   终端指令仅支持Ubuntu。CUDA_VISIBLE_DEVICES用于在Ubuntu下指定显卡。
@@ -71,12 +72,12 @@ if __name__ == "__main__":
     #   fp16        是否使用混合精度训练
     #               可减少约一半的显存、需要pytorch1.7.1以上
     #---------------------------------------------------------------------#
-    fp16            = False
+    fp16            = True
     #---------------------------------------------------------------------#
     #   classes_path    指向model_data下的txt，与自己训练的数据集相关 
     #                   训练前一定要修改classes_path，使其对应自己的数据集
     #---------------------------------------------------------------------#
-    classes_path    = 'path/to/your/dataset/classes.txt'
+    classes_path    = '/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/data/VisDrone/classes.txt'
     #----------------------------------------------------------------------------------------------------------------------------#
     #   权值文件的下载请看README，可以通过网盘下载。模型的 预训练权重 对不同数据集是通用的，因为特征是通用的。
     #   模型的 预训练权重 比较重要的部分是 主干特征提取网络的权值部分，用于进行特征提取。
@@ -109,7 +110,7 @@ if __name__ == "__main__":
     #                   l : 对应yolov8_l
     #                   x : 对应yolov8_x
     #------------------------------------------------------#
-    phi             = 's'
+    phi             = 'n'
     #----------------------------------------------------------------------------------------------------------------------------#
     #   pretrained      是否使用主干网络的预训练权重，此处使用的是主干的权重，因此是在模型构建的时候进行加载的。
     #                   如果设置了model_path，则主干的权值无需加载，pretrained的值无意义。
@@ -130,7 +131,7 @@ if __name__ == "__main__":
     #                       当mosaic=True时，本代码会在special_aug_ratio范围内开启mosaic。
     #                       默认为前70%个epoch，100个世代会开启70个世代。
     #------------------------------------------------------------------#
-    mosaic              = False
+    mosaic              = True
     mosaic_prob         = 0.5
     mixup               = False
     mixup_prob          = 0.5
@@ -176,7 +177,7 @@ if __name__ == "__main__":
     #------------------------------------------------------------------#
     Init_Epoch          = 0
     Freeze_Epoch        = 100
-    Freeze_batch_size   = 16
+    Freeze_batch_size   = 32
     #------------------------------------------------------------------#
     #   解冻阶段训练参数
     #   此时模型的主干不被冻结了，特征提取网络会发生改变
@@ -187,7 +188,7 @@ if __name__ == "__main__":
     #   Unfreeze_batch_size     模型在解冻后的batch_size
     #------------------------------------------------------------------#
     UnFreeze_Epoch      = 200
-    Unfreeze_batch_size = 8
+    Unfreeze_batch_size = 16
     #------------------------------------------------------------------#
     #   Freeze_Train    是否进行冻结训练
     #                   默认先冻结主干训练后解冻训练。
@@ -225,7 +226,7 @@ if __name__ == "__main__":
     #------------------------------------------------------------------#
     #   save_dir        权值与日志文件保存的文件夹
     #------------------------------------------------------------------#
-    save_dir            = 'logs'
+    save_dir            = '/home/jack/11/1027/0_others/SO-YOLO-main/runs/VisDrone_test-SO-YOLO'
     #------------------------------------------------------------------#
     #   eval_flag       是否在训练时进行评估，评估对象为验证集
     #                   安装pycocotools库后，评估体验更佳。
@@ -248,8 +249,8 @@ if __name__ == "__main__":
     #   train_annotation_path   训练图片路径和标签
     #   val_annotation_path     验证图片路径和标签
     #------------------------------------------------------#
-    train_annotation_path   = 'path/to/your/train.txt'
-    val_annotation_path     = 'path/to/your/val.txt'
+    train_annotation_path   = '/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/data/VisDrone/train.txt'
+    val_annotation_path     = '/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/data/VisDrone/val.txt'
 
     seed_everything(seed)
     #------------------------------------------------------#

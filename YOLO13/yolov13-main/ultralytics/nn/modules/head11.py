@@ -6,6 +6,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.init import constant_, xavier_uniform_
 
 from ultralytics.utils.tal import TORCH_1_10, dist2bbox, dist2rbox, make_anchors
@@ -16,6 +17,19 @@ from .transformer import MLP, DeformableTransformerDecoder, DeformableTransforme
 from .utils import bias_init_with_prob, linear_init
 
 __all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect"
+
+
+
+# class TinyObjectHead(nn.Module):
+#     def __init__(self, in_ch, out_ch):
+#         super().__init__()
+#         # 使用感受野较小但聚焦度高的结构
+#         self.conv = nn.Sequential(
+#             Conv(in_ch, out_ch, 3),
+#             # 引入空间注意力，让 Head 关注有目标的像素
+#             SpatialAttention(kernel_size=7), 
+#             Conv(out_ch, out_ch, 3)
+#         )
 
 
 class Detect(nn.Module):
@@ -34,15 +48,19 @@ class Detect(nn.Module):
     def __init__(self, nc=80, ch=()):
         """Initializes the YOLO detection layer with specified number of classes and channels."""
         super().__init__()
+
+        # 假设 ch = (P2_ch, P3_ch, P4_ch, P5_ch)
+
         self.nc = nc  # number of classes
         self.nl = len(ch)  # number of detection layers
         self.reg_max = 16  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
         self.no = nc + self.reg_max * 4  # number of outputs per anchor
         self.stride = torch.zeros(self.nl)  # strides computed during build
         c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))  # channels
+        
+        
         self.cv2 = nn.ModuleList(
-            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch
-        )
+            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch)
         self.cv3 = (
             nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)
             if self.legacy
@@ -55,6 +73,54 @@ class Detect(nn.Module):
                 for x in ch
             )
         )
+
+
+        # # --- 重点修改区域开始 ---
+        
+        # # 1. 回归分支 (cv2): 负责预测框的位置 (x, y, w, h)
+        # # 对于 VisDrone 弱小目标，位置比类别更难回归，因此我们在 P2 层引入 CoordAtt
+        # self.cv2 = nn.ModuleList()
+        # for i, x in enumerate(ch):
+        #     if i == 0: # 假设 ch[0] 是 P2 层 (极小目标层)
+        #         # 使用 CoordAtt 增强位置敏感度
+        #         layer = nn.Sequential(
+        #             Conv(x, c2, 3),
+        #             CoordAtt(c2, c2), # <--- 插入坐标注意力
+        #             Conv(c2, c2, 3),
+        #             nn.Conv2d(c2, 4 * self.reg_max, 1)
+        #         )
+        #     else:
+        #         # 其他层保持标准结构，节省计算量
+        #         layer = nn.Sequential(
+        #             Conv(x, c2, 3),
+        #             Conv(c2, c2, 3),
+        #             nn.Conv2d(c2, 4 * self.reg_max, 1)
+        #         )
+        #     self.cv2.append(layer)
+
+        # # 2. 分类分支 (cv3): 负责预测是什么物体
+        # # 对于 P2 层，背景干扰大，我们引入 ContextAggregation 帮助区分背景和物体
+        # self.cv3 = nn.ModuleList()
+        # for i, x in enumerate(ch):
+        #     if i == 0: # P2 层
+        #         layer = nn.Sequential(
+        #             # 使用上下文聚合模块替代普通卷积
+        #             ContextAggregation(x, c3), # <--- 插入上下文模块
+        #             Conv(c3, c3, 3),
+        #             nn.Conv2d(c3, self.nc, 1)
+        #         )
+        #     else:
+        #         # 其他层保持标准结构 (这里以非 legacy 模式为例)
+        #         layer = nn.Sequential(
+        #             nn.Sequential(DWConv(x, x, 3), Conv(x, c3, 1)),
+        #             nn.Sequential(DWConv(c3, c3, 3), Conv(c3, c3, 1)),
+        #             nn.Conv2d(c3, self.nc, 1),
+        #         )
+        #     self.cv3.append(layer)
+            
+        # # --- 重点修改区域结束 ---
+
+
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
 
         if self.end2end:
@@ -208,8 +274,8 @@ class Detect_SmallObj(Detect):
     针对小目标优化的检测头：
     1. 移除 DWConv,使用标准 Conv。
     2. 加入 CoordAtt 注意力机制。
-    论文: Coordinate Attention for Efficient Mobile Network Design
-    # 作用: 同时捕捉通道关系和长距离的位置依赖，非常适合 VisDrone 中定位密集小目标
+# 论文: Coordinate Attention for Efficient Mobile Network Design
+# 作用: 同时捕捉通道关系和长距离的位置依赖，非常适合 VisDrone 中定位密集小目标
 
     """
     def __init__(self, nc=80, ch=()):
@@ -238,6 +304,9 @@ class Detect_SmallObj(Detect):
                 nn.Conv2d(c3, self.nc, 1) # 输出层
             ) for x in ch
         )
+
+
+
 
 
 class Segment(Detect):

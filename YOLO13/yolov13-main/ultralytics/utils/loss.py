@@ -9,7 +9,7 @@ from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
 from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
 from ultralytics.utils.torch_utils import autocast
 
-from .metrics import bbox_iou, probiou
+from .metrics import bbox_iou, probiou, compute_dnwd_loss
 from .tal import bbox2dist
 
 
@@ -99,8 +99,28 @@ class BboxLoss(nn.Module):
     def forward(self, pred_dist, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask):
         """IoU loss."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
+       
+       
         iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
         loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+
+        # # 改为D-NWD
+        # iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+        # loss_ciou = (1.0 - iou) * weight
+
+        
+        # # 2. 计算 D-NWD (仅针对正样本)
+        # # 同样需要 [fg_mask]
+        # p_xywh = xyxy2xywh(pred_bboxes[fg_mask])
+        # g_xywh = xyxy2xywh(target_bboxes[fg_mask])   
+        
+        # # 调用之前定义的 D-NWD 函数 (即论文中的 improved_wasserstein_loss)
+        # loss_dnwd = compute_dnwd_loss(p_xywh, g_xywh) * weight
+
+        # # 3. 融合 Loss
+        # # 建议先按 1:1 融合，如果发现 Box Loss 很难降，可以尝试 (loss_ciou + 0.5 * loss_dnwd)
+        # loss_iou = (loss_ciou + loss_dnwd).sum() / target_scores_sum
+
 
         # DFL loss
         if self.dfl_loss:

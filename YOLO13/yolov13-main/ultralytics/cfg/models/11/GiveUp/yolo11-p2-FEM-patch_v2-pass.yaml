@@ -1,0 +1,75 @@
+# Ultralytics YOLO11 修订版 + 全尺度 SOFE 增强
+# 特征：P2, P3, P4 每个尺度都拥有独立的 PatchAttention 增强分支
+
+nc: 10 
+scales:
+  n: [0.50, 0.25, 1024]
+
+backbone:
+  # ... (保持不变) ...
+  - [-1, 1, Conv, [64, 3, 2]]      # 0-P1/2
+  - [-1, 1, Conv, [128, 3, 2]]     # 1-P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]] # 2
+  - [-1, 1, FEM, [256]]            # 3-P2 增强 (Low for SOFE-P2)
+
+  - [-1, 1, Conv, [256, 3, 2]]     # 4-P3/8
+  - [-1, 2, C3k2, [512, False, 0.25]] # 5
+  - [-1, 1, FEM, [512]]            # 6-P3 增强 (Low for SOFE-P3)
+
+  - [-1, 1, Conv, [512, 3, 2]]     # 7-P4/16
+  - [-1, 2, C3k2, [512, True]]     # 8-P4处理后
+  - [-1, 1, SPPF, [512, 5]]        # 9
+  - [-1, 2, C2PSA, [512]]          # 10-P4 全局上下文 (High for ALL SOFEs)
+
+head:
+  # ================= SOFE 并行增强区 =================
+  
+  # --- 1. SOFE for P2 (跨度最大: 4倍) ---
+  # P2(160x160) vs P4(40x40). P4下采样2倍->20. P2需除以8->20.
+  - [[3, 10], 1, PatchAttention, [8, 256]] # 11: SOFE-P2 MHCA
+  - [-1, 1, Conv, [256, 7, 1]]             # 12: SOFE-P2 7x7 Conv
+
+  # --- 2. SOFE for P3 (跨度中等: 2倍) ---
+  # P3(80x80) vs P4(40x40). P4下采样2倍->20. P3需除以4->20.
+  - [[6, 10], 1, PatchAttention, [4, 512]] # 13: SOFE-P3 MHCA (PatchSize=4)
+  - [-1, 1, Conv, [512, 7, 1]]             # 14: SOFE-P3 7x7 Conv
+
+  # --- 3. SOFE for P4 (自增强: 1倍) ---
+  # P4(40x40) vs P4(40x40). P4下采样2倍->20. P4需除以2->20.
+  - [[10, 10], 1, PatchAttention, [2, 512]] # 15: SOFE-P4 MHCA (PatchSize=2)
+  - [-1, 1, Conv, [512, 7, 1]]              # 16: SOFE-P4 7x7 Conv
+
+  # ================= FPN (Top-Down) =================
+  - [10, 1, nn.Upsample, [None, 2, "nearest"]] # 17 (P4->P3)
+  - [[-1, 6], 1, Concat, [1]]      # 18 cat Backbone P3
+  - [-1, 2, C3k2, [256, False]]    # 19 (P3-Middle)
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 20 (P3->P2)
+  - [[-1, 3], 1, Concat, [1]]      # 21 cat Backbone P2
+  - [-1, 2, C3k2, [128, False]]    # 22 (FPN-P2 输出)
+
+  # ================= PAN (Bottom-Up) & SOFE 融合 =================
+  
+  # --- P2 最终输出 ---
+  # 融合 [FPN-P2] 和 [SOFE-P2]
+  - [[22, 12], 1, Concat, [1]]     # 23
+  - [-1, 1, C3k2, [128, False]]    # 24 -> Detect P2
+
+  # --- P3 最终输出 ---
+  - [24, 1, Conv, [256, 3, 2]]     # 25 (Downsample P2->P3)
+  - [[-1, 19], 1, Concat, [1]]     # 26 cat FPN-P3
+  
+  # 关键点: 在这里融合 SOFE-P3 (Layer 14)
+  - [[-1, 14], 1, Concat, [1]]     # 27 cat SOFE-P3
+  - [-1, 2, C3k2, [256, False]]    # 28 -> Detect P3
+
+  # --- P4 最终输出 ---
+  - [28, 1, Conv, [512, 3, 2]]     # 29 (Downsample P3->P4)
+  - [[-1, 10], 1, Concat, [1]]     # 30 cat Backbone P4
+  
+  # 关键点: 在这里融合 SOFE-P4 (Layer 16)
+  - [[-1, 16], 1, Concat, [1]]     # 31 cat SOFE-P4
+  - [-1, 2, C3k2, [512, False]]    # 32 -> Detect P4
+
+  # 最终检测
+  - [[24, 28, 32], 1, Detect, [nc]] # 33

@@ -26,7 +26,7 @@ head:
   # P3 来源 -> 层 6 (FEM输出)
   # P4 来源 -> 层 9 (FEM输出)
   # P5 来源 -> 层 11 (原A2C2f输出)
-  - [[6, 9, 11], 2, HyperACE, [512, 8, True, True, 0.5, 1, "both"]] # 12
+  - [[5, 8, 11], 2, HyperACE, [512, 8, True, True, 0.5, 1, "both"]] # 12
   
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 13
   - [ 12, 1, DownsampleConv, []] # 14

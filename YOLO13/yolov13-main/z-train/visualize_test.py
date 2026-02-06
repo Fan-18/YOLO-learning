@@ -1,3 +1,7 @@
+"""
+可视化显示当前网络每个模块的输出特征图
+"""
+
 import torch
 import cv2
 import os

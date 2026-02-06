@@ -1,0 +1,85 @@
+# YOLOv13-VisDrone-Tiny-Corrected.yaml
+nc: 80
+scales:
+  n: [0.50, 0.25, 1024]
+
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv,  [64, 3, 2]] # 0
+  - [-1, 1, Conv,  [128, 3, 2, 1, 2]] # 1
+  - [-1, 2, DSC3k2,  [256, False, 0.25]] # 2
+  - [-1, 1, Conv,  [256, 3, 2, 1, 4]] # 3
+  - [-1, 2, DSC3k2,  [512, False, 0.25]] # 4
+  - [-1, 1, DSConv,  [512, 3, 2]] # 5
+  - [-1, 4, A2C2f, [512, True, 4]] # 6
+  - [-1, 1, DSConv,  [1024, 3, 2]] # 7
+  - [-1, 4, A2C2f, [1024, True, 1]] # 8
+
+head:
+  # --- 顶层注意力与隧道构建 ---
+  - [[4, 6, 8], 2, HyperACE, [512, 8, True, True, 0.5, 1, "both"]] # 9
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 10 (全局上下文: 实际上是 P3 尺度，128通道)
+  - [ 9, 1, DownsampleConv, []] # 11
+  
+  # Tunnel 定义
+  - [[6, 9], 1, FullPAD_Tunnel, []]  # 12
+  - [[4, 10], 1, FullPAD_Tunnel, []] # 13
+  - [[8, 11], 1, FullPAD_Tunnel, []] # 14
+  
+  # --- FPN: 自上而下 ---
+  
+  # P5 -> P4
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 15
+  - [[-1, 12], 1, Concat, [1]] 
+  - [-1, 2, DSC3k2, [512, True]] # 17 (P4 FPN 原始特征: 128通道)
+  
+  # [P4 增强旁路] 
+  # P4 是 128ch，Layer 9 是 128ch，通道匹配，无需调整
+  - [[-1, 9], 1, FullPAD_Tunnel, []]  # 18 (P4 Enhanced)
+
+  # P4 -> P3
+  - [17, 1, nn.Upsample, [None, 2, "nearest"]] # 19
+  - [[-1, 13], 1, Concat, [1]] 
+  - [-1, 2, DSC3k2, [256, True]] # 21 (P3 FPN 原始特征: 64通道)
+
+  # [P3 增强旁路 - 修复点 1] 
+  # Layer 10 是 128ch，Layer 21 是 64ch。必须先用 Conv 降维 Layer 10。
+  - [10, 1, Conv, [256, 1, 1]] # 22 (1x1 Conv: 128ch -> 64ch)
+  - [[21, 22], 1, FullPAD_Tunnel, []] # 23 (P3 Enhanced, 输入都是 64ch)
+
+  # P3 -> P2
+  - [21, 1, nn.Upsample, [None, 2, "nearest"]] # 24
+  - [[-1, 2], 1, Concat, [1]] 
+  - [-1, 2, DSC3k2, [128, True]] # 26 (P2 FPN 原始特征: 32通道)
+
+  # --- PAN: 自下而上 ---
+  
+  # [P2 增强旁路 - 修复点 2]
+  # Layer 10 (128ch) -> Upsample -> Conv(32ch) -> Tunnel
+  - [10, 1, nn.Upsample, [None, 2, "nearest"]] # 27 (上采样到 P2 尺度)
+  - [-1, 1, Conv, [128, 1, 1]] # 28 (1x1 Conv: 128ch -> 32ch)
+  - [[26, 28], 1, FullPAD_Tunnel, []] # 29 (P2 Final Output)
+
+  # P2 -> P3
+  - [-1, 1, Conv, [128, 3, 2]] # 30
+  # 拼接 P3 增强版 (Layer 23)
+  - [[-1, 23], 1, Concat, [1]] # 31
+  - [-1, 2, DSC3k2, [256, True]] # 32
+  - [10, 1, Conv, [256, 1, 1]] # 33 (Adapter: 128ch -> 64ch)
+  - [[32, 33], 1, FullPAD_Tunnel, []] # 34 (P3 Final Output)
+
+  # P3 -> P4
+  - [32, 1, Conv, [256, 3, 2]] # 35
+  # 拼接 P4 增强版 (Layer 18)
+  - [[-1, 18], 1, Concat, [1]] # 36
+  - [-1, 2, DSC3k2, [512, True]] # 37
+  - [[-1, 9], 1, FullPAD_Tunnel, []] # 38 (P4 Final Output)
+
+  # P4 -> P5
+  - [37, 1, Conv, [512, 3, 2]] # 39
+  - [[-1, 14], 1, Concat, [1]] 
+  - [-1, 2, DSC3k2, [1024, True]] # 41
+  - [[-1, 11], 1, FullPAD_Tunnel, []] # 42 (P5 Final Output)
+
+  # Detect 层
+  - [[29, 34, 38, 42], 1, Detect, [nc]]

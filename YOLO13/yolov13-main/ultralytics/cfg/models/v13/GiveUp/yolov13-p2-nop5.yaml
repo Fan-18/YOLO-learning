@@ -1,0 +1,59 @@
+# 增加P2,删除p5
+
+nc: 80 
+scales: 
+  n: [0.50, 0.25, 1024] 
+
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv,  [64, 3, 2]] # 0-P1/2
+
+  - [-1, 1, Conv,  [128, 3, 2, 1, 2]] # 1-P2/4
+  - [-1, 2, DSC3k2,  [256, False, 0.25]] # 2-P2特征 (实际64ch)
+
+  - [-1, 1, Conv,  [256, 3, 2, 1, 4]] # 3-P3/8
+  - [-1, 2, DSC3k2,  [512, False, 0.25]] # 4-P3特征 (实际128ch)
+
+  - [-1, 1, DSConv,  [512, 3, 2]] # 5-P4/16
+  - [-1, 4, A2C2f, [512, True, 4]] # 6-P4特征 (实际128ch)
+ 
+head:
+  # HyperACE 现在只接收 P2, P3, P4
+  - [[2, 4, 6], 2, HyperACE, [512, 8, True, True, 0.5, 1, "both"]] # 7 (128ch, P3分辨率)
+  
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 8 (128ch, P2分辨率)
+  - [ 7, 1, DownsampleConv, [512]] # 9 (128ch, P4分辨率)
+  
+  # --- 通道对齐层 ---
+  - [8, 1, Conv, [256, 1, 1]] # 10 (将128ch降为64ch，匹配层2)
+
+  # --- 第一组：特征初始隧道 (只有 P2, P3, P4) ---
+  - [[6, 9], 1, FullPAD_Tunnel, []] # 11 (P4: 128 vs 128)
+  - [[4, 7], 1, FullPAD_Tunnel, []]  # 12 (P3: 128 vs 128)
+  - [[2, 10], 1, FullPAD_Tunnel, []] # 13 (P2: 64 vs 64)
+
+  # --- 自上而下路径 (Top-Down) ---
+  - [11, 1, nn.Upsample, [None, 2, "nearest"]] # 14 (P4 -> P3)
+  - [[-1, 12], 1, Concat, [1]] # 15 (256ch)
+  - [-1, 2, DSC3k2, [512, True]] # 16 (128ch)
+  - [[-1, 7], 1, FullPAD_Tunnel, []] # 17 (P3回归隧道)
+
+  - [16, 1, nn.Upsample, [None, 2, "nearest"]] # 18 (P3 -> P2)
+  - [[-1, 13], 1, Concat, [1]] # 19 (192ch)
+  - [-1, 2, DSC3k2, [256, True]] # 20 (64ch)
+  - [10, 1, Conv, [256, 1, 1]] # 21 (P2 Side Conv)
+  - [[20, 21], 1, FullPAD_Tunnel, []] # 22 (P2输出隧道) -> [P2 Head]
+
+  # --- 自下而上路径 (Bottom-Up) ---
+  - [20, 1, Conv, [512, 3, 2]] # 23 (P2 -> P3 下采样，输出128ch)
+  - [[-1, 17], 1, Concat, [1]] # 24 (256ch)
+  - [-1, 2, DSC3k2, [512, True]] # 25 (128ch)
+  - [[-1, 7], 1, FullPAD_Tunnel, []] # 26 (P3输出隧道) -> [P3 Head]
+
+  - [25, 1, Conv, [512, 3, 2]] # 27 (P3 -> P4 下采样，输出128ch)
+  - [[-1, 11], 1, Concat, [1]] # 28 (256ch)
+  - [-1, 2, DSC3k2, [512, True]] # 29 (128ch)
+  - [[-1, 9], 1, FullPAD_Tunnel, []] # 30 (P4输出隧道) -> [P4 Head]
+
+  # --- 最终检测头 (三头模式) ---
+  - [[22, 26, 30], 1, Detect, [nc]] # Detect(P2, P3, P4)

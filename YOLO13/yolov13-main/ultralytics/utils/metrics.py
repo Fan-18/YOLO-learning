@@ -17,6 +17,39 @@ OKS_SIGMA = (
 )
 
 
+def compute_dnwd_loss(pred, target, constant_factor=0.8, constant_base=4.0, eps=1e-7):
+    """
+    针对 YOLOv11 适配的 D-NWD (Dynamic Normalized Wasserstein Distance) Loss
+    Args:
+        pred: 预测框，格式为 (cx, cy, w, h)，shape 为 (N, 4)
+        target: 真实框，格式为 (cx, cy, w, h)，shape 为 (N, 4)
+    """
+    # 1. 计算中心点距离平方
+    center_distance = (pred[:, 0] - target[:, 0]).pow(2) + \
+                      (pred[:, 1] - target[:, 1]).pow(2) + eps
+
+    # 2. 计算宽高距离平方 (使用论文中的 Log 改进版)
+    # 注意：确保 w, h 大于 0
+    w1, h1 = pred[:, 2].clamp(min=eps), pred[:, 3].clamp(min=eps)
+    w2, h2 = target[:, 2].clamp(min=eps), target[:, 3].clamp(min=eps)
+    
+    wh_distance = (torch.log(w1) - torch.log(w2)).pow(2) + \
+                  (torch.log(h1) - torch.log(h2)).pow(2)
+
+    # 3. 计算 Wasserstein 距离
+    wasserstein_2 = center_distance + wh_distance
+
+    # 4. 动态计算归一化常数 C (Dynamic Factor)
+    # 基于真实框的面积开根号来衡量尺度
+    area = torch.sqrt(w2 * h2)
+    constant = constant_factor * area + constant_base
+
+    # 5. 计算最终 Loss
+    dnwd_loss = 1 - torch.exp(-torch.sqrt(wasserstein_2) / constant)
+    
+    return dnwd_loss
+
+
 def bbox_ioa(box1, box2, iou=False, eps=1e-7):
     """
     Calculate the intersection over box2 area given box1 and box2. Boxes are in x1y1x2y2 format.

@@ -22,7 +22,7 @@ def main():
     # 3. 加载模型
     # 注意：你用 nano 的权重(pt)加载到自定义 yaml 结构中
     # Ultralytics 会自动匹配能用的权重，不匹配的(如FEM模块)会随机初始化，这是正常的 Transfer Learning。
-    model = YOLO(r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/models/11/yolo11-P2-FEMv2.yaml')
+    model = YOLO(r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/models/11/yolo11-p2-FEM-SPDv2.yaml')
     model.load("yolo11n.pt")
 
     # 4. 训练配置
@@ -46,7 +46,7 @@ def main():
         
         patience=50,
         project='/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone',
-        name='20_yolo11n_p2_FEMv2_VisDrone_1024_bs64' # 改名标记 batch size
+        name='test_yolo11n_p2_FEM_SPDv3_yamlv2_VisDrone_1024_bs64' # 改名标记 batch size
     )
 
 if __name__ == '__main__':

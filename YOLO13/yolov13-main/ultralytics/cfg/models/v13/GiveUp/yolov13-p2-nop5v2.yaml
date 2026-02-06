@@ -1,0 +1,65 @@
+# 增加P2,删除p5,将5,6层改为DS+A2
+
+
+nc: 80 
+scales: 
+  n: [0.50, 0.25, 1024]
+
+  
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv,  [64, 3, 2]] # 0-P1/2
+  - [-1, 1, Conv,  [128, 3, 2, 1, 2]] # 1-P2/4
+  - [-1, 2, DSC3k2,  [256, False, 0.25]] # 2-P2特征 (64ch)
+
+  # --- [修正1] P3 参数改为 512，输出 128ch，保证信息量 ---
+  - [-1, 1, DSConv,  [512, 3, 2]] # 3-P3/8 (128ch)
+  - [-1, 4, A2C2f, [512, True, 4]] # 4-P3特征 (128ch)
+
+  # P4 阶段 (128ch)
+  - [-1, 1, DSConv,  [512, 3, 2]] # 5-P4/16 (128ch)
+  - [-1, 4, A2C2f, [512, True, 4]] # 6-P4特征 (128ch)
+ 
+head:
+  # --- [修正2] HyperACE 参数改回 512，输出 128ch ---
+  # 这样 P3, P4 都是 128ch，隧道可以直接连，不需要适配器
+  - [[2, 4, 6], 2, HyperACE, [512, 8, True, True, 0.5, 1, "both"]] # 7 (128ch, P3分辨率)
+  
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 8 (128ch, P2分辨率)
+  - [ 7, 1, DownsampleConv, [512]] # 9 (128ch, P4分辨率)
+  
+  # --- 通道对齐层 (只为 P2 服务) ---
+  # 因为 P2 是 64ch，而 Upsample 过来的是 128ch，所以需要降维
+  - [8, 1, Conv, [256, 1, 1]] # 10 (128 -> 64ch, 匹配 Layer 2)
+
+  # --- 特征初始隧道 ---
+  - [[6, 9], 1, FullPAD_Tunnel, []] # 11 (P4: 128 vs 128) OK
+  - [[4, 7], 1, FullPAD_Tunnel, []]  # 12 (P3: 128 vs 128) OK
+  - [[2, 10], 1, FullPAD_Tunnel, []] # 13 (P2: 64 vs 64) OK (已对齐)
+
+  # --- 自上而下路径 (Top-Down) ---
+  - [11, 1, nn.Upsample, [None, 2, "nearest"]] # 14 (P4 -> P3)
+  - [[-1, 12], 1, Concat, [1]] # 15 (256ch)
+  - [-1, 2, DSC3k2, [512, True]] # 16 (输出 128ch)
+  - [[-1, 7], 1, FullPAD_Tunnel, []] # 17 (P3回归隧道: 128 vs 128) OK
+
+  - [16, 1, nn.Upsample, [None, 2, "nearest"]] # 18 (P3 -> P2)
+  - [[-1, 13], 1, Concat, [1]] # 19 (128 + 64 = 192ch)
+  - [-1, 2, DSC3k2, [256, True]] # 20 (输出 64ch)
+  - [10, 1, Conv, [256, 1, 1]] # 21 (P2 Side Conv: 64ch)
+  - [[20, 21], 1, FullPAD_Tunnel, []] # 22 (P2输出隧道: 64 vs 64) -> [P2 Head]
+
+  # --- 自下而上路径 (Bottom-Up) ---
+  # 既然你喜欢 DSConv，这里保留，参数设为 512 (128ch)
+  - [20, 1, DownsampleConv, [512]] # 23 (P2 -> P3, 128ch)
+  - [[-1, 17], 1, Concat, [1]] # 24 (128 + 128 = 256ch)
+  - [-1, 2, DSC3k2, [512, True]] # 25 (输出 128ch)
+  - [[-1, 7], 1, FullPAD_Tunnel, []] # 26 (P3输出隧道: 128 vs 128) -> [P3 Head]
+
+  - [25, 1, DownsampleConv, [512]] # 27 (P3 -> P4, 128ch)
+  - [[-1, 11], 1, Concat, [1]] # 28 (128 + 128 = 256ch)
+  - [-1, 2, DSC3k2, [512, True]] # 29 (输出 128ch)
+  - [[-1, 9], 1, FullPAD_Tunnel, []] # 30 (P4输出隧道: 128 vs 128) -> [P4 Head]
+
+  # --- 最终检测头 ---
+  - [[22, 26, 30], 1, Detect, [nc]] # Detect(P2, P3, P4)

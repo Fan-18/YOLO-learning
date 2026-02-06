@@ -1,3 +1,6 @@
+"""
+将模块在测试集上的检测结果可视化
+"""
 import os
 import cv2
 import numpy as np
@@ -227,21 +230,25 @@ if __name__ == '__main__':
     # # output_dir = '/home/jack/11/1027/YOLO13/yolov13-main/runs/yolo11x-RS.yaml_VisDrone-300/test_images_nolabel'
     # output_dir = '/home/jack/11/1027/YOLO13/yolov13-main/runs/yolo11x-RS.yaml_VisDrone-300/test_images'
     # VISO-car
-    images_dir = '/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/data/VISO/Detection_yolo_format/car/test/images'
-    labels_dir = '/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/data/VISO/Detection_yolo_format/car/test/labels'
+    data_dir = '/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/data/VisDrone/VisDrone2019-DET-test-dev'
+    images_dir = os.path.join(data_dir, 'images')
+    labels_dir = os.path.join(data_dir, 'labels')
     # output_dir = '/home/jack/11/1027/YOLO13/yolov13-main/runs/yolo11x-RS.yaml_VisDrone-300/test_images_nolabel'
-    output_dir = '/home/jack/11/1027/YOLO13/yolov13-main/runs/VISO_Detection/car/1_yolo11n_VISO_1024/test_images'
+    output_dir = '/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone/26_yolo11n_p2_FEM_patch(Conv3)_VisDrone_1024/test_images'
 
 
 
     # 加载类别定义
-    yaml_path = '/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/datasets/VISO_Detection.yaml'
+    yaml_path = '/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/datasets/VisDrone.yaml'
     class_names = load_visdrone_classes(yaml_path)
 
     # 加载YOLO模型
-    model_path = '/home/jack/11/1027/YOLO13/yolov13-main/runs/VISO_Detection/car/1_yolo11n_VISO_1024/weights/best.pt'
+    model_path = '/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone/26_yolo11n_p2_FEM_patch(Conv3)_VisDrone_1024/weights/best.pt'
     model = YOLO(model_path)
 
     # 处理整个目录
     process_directory(images_dir, labels_dir, model, class_names, output_dir, show_label=SHOW_LABEL)
     print("处理完成!")
+
+
+# python z-train/detect_test.py
