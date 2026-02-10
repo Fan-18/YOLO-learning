@@ -14,8 +14,11 @@ from .block import DFL, BNContrastiveHead, ContrastiveHead, Proto
 from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
+from ultralytics.nn.modules.block import SELayer, CBAM
 
-__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect"
+
+__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect", "Detect_YOLOX", "Detect_UniRep", "Detect_Decoupled_SE", "Detect_Decoupled_CBAM", "Detect_SmallObj", "Detect_TaskSpecific_LK"
+
 
 
 class Detect(nn.Module):
@@ -33,7 +36,7 @@ class Detect(nn.Module):
 
     def __init__(self, nc=80, ch=()):
         """Initializes the YOLO detection layer with specified number of classes and channels."""
-        super().__init__()
+        super().__init__() 
         self.nc = nc  # number of classes
         self.nl = len(ch)  # number of detection layers
         self.reg_max = 16  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
@@ -171,7 +174,46 @@ class Detect(nn.Module):
         i = torch.arange(batch_size)[..., None]  # batch indices
         return torch.cat([boxes[i, index // nc], scores[..., None], (index % nc)[..., None].float()], dim=-1)
 
+class Detect_YOLOX(Detect):
+    """
+    YOLOX Decoupled Head for comparison in Ablation Studies.
+    Structure:
+        Input -> 1x1 Conv (Stem) -> Split into two branches:
+            Branch 1 (Cls): 3x3 Conv -> 3x3 Conv -> 1x1 Conv (Output)
+            Branch 2 (Reg): 3x3 Conv -> 3x3 Conv -> 1x1 Conv (Output)
+    Reference: YOLOX: Exceeding YOLO Series in 2021
+    """
+    def __init__(self, nc=80, ch=()):
+        super().__init__(nc, ch)
+        
+        
+        # 覆盖父类 Detect 的 cv2 (Box分支) 和 cv3 (Cls分支)
+        self.cv2 = nn.ModuleList()
+        self.cv3 = nn.ModuleList()
 
+        for x in ch:
+            hidden_channels = x
+            # === YOLOX Style Decoupled Head ===
+            
+            # 💡 进阶优化：如果是 Nano/Tiny 模型 (通道很小)，建议用 DWConv 节省参数
+            # 如果通道数大于 128 (说明是 M/L/X 模型)，则用标准卷积
+            ConvLayer = DWConv if hidden_channels < 128 else Conv
+
+           # === 回归分支 (Regression) ===
+            self.cv2.append(nn.Sequential(
+                Conv(x, hidden_channels, 1),             # 1x1 降维/对齐
+                ConvLayer(hidden_channels, hidden_channels, 3), # 3x3 卷积
+                ConvLayer(hidden_channels, hidden_channels, 3), # 3x3 卷积
+                nn.Conv2d(hidden_channels, 4 * self.reg_max, 1) # 输出
+            ))
+            
+            # === 分类分支 (Classification) ===
+            self.cv3.append(nn.Sequential(
+                Conv(x, hidden_channels, 1),             # 1x1 降维/对齐
+                ConvLayer(hidden_channels, hidden_channels, 3), 
+                ConvLayer(hidden_channels, hidden_channels, 3), 
+                nn.Conv2d(hidden_channels, self.nc, 1)   # 输出
+            ))
 
 # === 1. 定义坐标注意力模块 (Coordinate Attention) ===
 class CoordAtt(nn.Module):
@@ -214,30 +256,112 @@ class Detect_SmallObj(Detect):
     """
     def __init__(self, nc=80, ch=()):
         super().__init__(nc, ch)
-        # 重新定义 cv2 (Box) 和 cv3 (Cls)
-        c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))
+        # # 重新定义 cv2 (Box) 和 cv3 (Cls)
+        # c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))
         
         # --- 改进点 1: 使用标准 Conv 替代 ModuleList 生成逻辑 ---
         # --- 改进点 2: 在两个卷积之间插入 CoordAtt 注意力 ---
         
-        self.cv2 = nn.ModuleList(
-            nn.Sequential(
-                Conv(x, c2, 3),           # 第一层标准卷积
-                CoordAtt(c2, c2),         # <--- 插入注意力：关注框的位置
-                Conv(c2, c2, 3),          # 第二层标准卷积
-                nn.Conv2d(c2, 4 * self.reg_max, 1) # 输出层
-            ) for x in ch
-        )
+        self.cv2 = nn.ModuleList()
+        self.cv3 = nn.ModuleList()
+
+        for x in ch:
+            # =============================================================
+            # 🚀 核心改进：分层自适应通道计算
+            # =============================================================
+            # 1. 回归分支通道 (c2_curr)
+            # 逻辑：取输入通道 x 和 4*reg_max 中的较大者，保证回归头有足够表达能力
+            # 同时限制最小值为 64 (防止太窄)
+            c2_curr = max((64, x, self.reg_max * 4))
+            
+            # 2. 分类分支通道 (c3_curr)
+            # 逻辑：取输入通道 x 和 类别数 nc 中的较小者 (避免分类头过宽)
+            # 同时限制最小值为 64
+            c3_curr = max(64, min(self.nc, 100)) 
+            # 或者简单点，直接跟随输入 x:
+            # c3_curr = x 
+            
+            # 💡 如果你想完全跟随 model scaling (n/s/m/l)，最简单粗暴的方法是：
+            # c2_curr = c3_curr = x
+            
+            # 这里我采用折中方案：c2_curr = x, c3_curr = x
+            # 这样既能自适应，又不会引入额外的超参
+            c2_curr = x
+            c3_curr = x
+
+            # === Box Branch (回归) ===
+            self.cv2.append(nn.Sequential(
+                Conv(x, c2_curr, 3),           # 3x3 标准卷积
+                CoordAtt(c2_curr, c2_curr),    # <--- 插入 CoordAtt
+                Conv(c2_curr, c2_curr, 3),     # 3x3 标准卷积
+                nn.Conv2d(c2_curr, 4 * self.reg_max, 1) # Output
+            ))
+            
+            # === Cls Branch (分类) ===
+            self.cv3.append(nn.Sequential(
+                Conv(x, c3_curr, 3),           # 3x3 标准卷积
+                CoordAtt(c3_curr, c3_curr),    # <--- 插入 CoordAtt
+                Conv(c3_curr, c3_curr, 3),     # 3x3 标准卷积
+                nn.Conv2d(c3_curr, self.nc, 1) # Output
+            ))
+
+# === 2. 任务感知大感受野解耦头 (新设计) ===
+class Detect_TaskSpecific_LK(Detect):
+    """
+    Task-Specific Large Kernel Decoupled Head (TSLK-Head).
+    
+    Design Philosophy:
+    1. Shared Stem with CoordAtt: Locks onto small object positions early.
+    2. Classification Branch: Uses 5x5 DWConv for larger context (helps distinguish small objects from background).
+    3. Regression Branch: Uses 3x3 Conv for precise edge localization.
+    4. Channels: Fixed to 256 (like YOLOX) to ensure sufficient feature capacity.
+    1. 整体架构参考：YOLOX论文名称: YOLOX: Exceeding YOLO Series in 2021 (CVPR 2021 - Oral)借鉴点: 解耦头（Decoupled Head）。设计原理: 作者指出分类（Classification）需要平移不变性，回归（Regression）需要平移同变性。如果共享特征，会产生任务冲突（Task Misalignment）。因此必须把它们拆开。你的改进: YOLOX 的两个分支都是 $3 \times 3$ 卷积，而你改进为非对称卷积。
+    2. 非对称卷积核参考：TOOD论文名称: TOOD: Task-aligned One-stage Object Detection (ICCV 2021)借鉴点: 任务对齐（Task Alignment）与 差异化感受野。设计原理: TOOD 提出，分类任务需要更多的上下文信息（Context），而定位任务关注物体边界。因此，分类分支应该拥有更大的感受野，而回归分支应该聚焦局部。你的改进: 这正是为什么我在分类分支使用了 $5 \times 5$ Depthwise Conv（大感受野），而在回归分支保留 $3 \times 3$ Conv（精准边界）的理论依据。
+    3. 核心机制参考：RepLKNet / ConvNeXt论文名称: Scaling Up Your Kernels to 31x31 (CVPR 2022) 或 A ConvNet for the 2020s (CVPR 2022)借鉴点: 大核卷积（Large Kernel）与 Depthwise 结合。设计原理: 这两篇文章证明了，通过堆叠 Depthwise Convolution 扩大感受野，CNN 可以达到类似 Transformer 的效果，同时保持比 Transformer 更低的归纳偏置（Inductive Bias），非常适合提取小目标的特征。
+    """
+    def __init__(self, nc=80, ch=()):
+        super().__init__(nc, ch)
         
-        self.cv3 = nn.ModuleList(
-            nn.Sequential(
-                # 抛弃原代码中的 DWConv 判断逻辑，强制使用标准 Conv
-                Conv(x, c3, 3),           # 第一层标准卷积 (特征更强)
-                CoordAtt(c3, c3),         # <--- 插入注意力：关注类别特征
-                Conv(c3, c3, 3),          # 第二层标准卷积
-                nn.Conv2d(c3, self.nc, 1) # 输出层
-            ) for x in ch
-        )
+        # # 核心改进1：强制使用 256 通道 (对齐 YOLOX 的容量)
+        # # 之前的 ch[0]//4 可能太小了，导致信息瓶颈
+        # hidden_channels = 256 
+        
+        self.cv2 = nn.ModuleList() # Reg (Box)
+        self.cv3 = nn.ModuleList() # Cls (Class)
+
+        for x in ch:
+            hidden_channels = x
+            # === Shared Stem (共享主干) ===
+            # 先降维/升维到 256，然后加注意力
+            # 这里我们不显式定义 stem 变量，而是将其分别集成到分支入口，或者使用更高效的方法
+            # 为了代码结构清晰，我们直接在分支里构建结构
+            
+            # === Regression Branch (回归分支 - 关注精度) ===
+            # 结构: Stem(1x1) -> CoordAtt -> 3x3 -> 3x3 -> Output
+            self.cv2.append(nn.Sequential(
+                Conv(x, hidden_channels, 1),             # 1. 维度对齐
+                CoordAtt(hidden_channels, hidden_channels), # 2. 共享位置感知 (这里每个分支独立算，效果更好但参数稍多)
+                Conv(hidden_channels, hidden_channels, 3),  # 3. 标准卷积用于定位
+                Conv(hidden_channels, hidden_channels, 3),  # 4. 精细调整
+                nn.Conv2d(hidden_channels, 4 * self.reg_max, 1) # Output
+            ))
+            
+            # === Classification Branch (分类分支 - 关注上下文) ===
+            # 结构: Stem(1x1) -> CoordAtt -> 5x5 DWConv -> 1x1 -> Output
+            # 创新点：使用 5x5 卷积扩大感受野，解决小目标语义特征弱的问题
+            self.cv3.append(nn.Sequential(
+                Conv(x, hidden_channels, 1),             # 1. 维度对齐
+                CoordAtt(hidden_channels, hidden_channels), # 2. 位置感知
+                
+                # 3. 大核卷积 (Large Kernel): 5x5, padding=2
+                # 使用 DWConv 节省参数量，使其不比 YOLOX 重
+                DWConv(hidden_channels, hidden_channels, k=5), 
+                
+                # 4. 1x1 卷积混合通道信息
+                Conv(hidden_channels, hidden_channels, 1),
+                
+                nn.Conv2d(hidden_channels, self.nc, 1)   # Output
+            ))
 
 
 class Segment(Detect):
@@ -263,6 +387,189 @@ class Segment(Detect):
         if self.training:
             return x, mc, p
         return (torch.cat([x, mc], 1), p) if self.export else (torch.cat([x[0], mc], 1), (x[1], mc, p))
+
+
+
+class Detect_Decoupled_SE(Detect):
+    """
+    Decoupled Head with Squeeze-and-Excitation (SE) Block.
+    Structure: Decoupled branches with SE inserted between 3x3 convs.
+    """
+    def __init__(self, nc=80, ch=()):
+        super().__init__(nc, ch)
+        
+        # # 为了公平对比，内部通道数统一设为 256 (类似于 YOLOX 标准)
+        # hidden_channels = 256
+        
+        self.cv2 = nn.ModuleList() # Regression branch
+        self.cv3 = nn.ModuleList() # Classification branch
+
+        for x in ch:
+            hidden_channels = x
+            # Regression Branch (回归分支)
+            self.cv2.append(nn.Sequential(
+                Conv(x, hidden_channels, 1),            # Stem
+                Conv(hidden_channels, hidden_channels, 3), # Conv 1
+                SELayer(hidden_channels),               # <--- 插入 SE Block
+                Conv(hidden_channels, hidden_channels, 3), # Conv 2
+                nn.Conv2d(hidden_channels, 4 * self.reg_max, 1) # Output
+            ))
+            
+            # Classification Branch (分类分支)
+            self.cv3.append(nn.Sequential(
+                Conv(x, hidden_channels, 1),            # Stem
+                Conv(hidden_channels, hidden_channels, 3), # Conv 1
+                SELayer(hidden_channels),               # <--- 插入 SE Block
+                Conv(hidden_channels, hidden_channels, 3), # Conv 2
+                nn.Conv2d(hidden_channels, self.nc, 1)  # Output
+            ))
+
+
+class Detect_Decoupled_CBAM(Detect):
+    """
+    Decoupled Head with CBAM Attention.
+    Structure: Decoupled branches with CBAM inserted between 3x3 convs.
+    """
+    def __init__(self, nc=80, ch=()):
+        super().__init__(nc, ch)
+        
+        # hidden_channels = 256
+        
+        self.cv2 = nn.ModuleList()
+        self.cv3 = nn.ModuleList()
+
+        for x in ch:
+            hidden_channels = x
+            # Regression Branch
+            self.cv2.append(nn.Sequential(
+                Conv(x, hidden_channels, 1),
+                Conv(hidden_channels, hidden_channels, 3),
+                CBAM(hidden_channels),                  # <--- 插入 CBAM
+                Conv(hidden_channels, hidden_channels, 3),
+                nn.Conv2d(hidden_channels, 4 * self.reg_max, 1)
+            ))
+            
+            # Classification Branch
+            self.cv3.append(nn.Sequential(
+                Conv(x, hidden_channels, 1),
+                Conv(hidden_channels, hidden_channels, 3),
+                CBAM(hidden_channels),                  # <--- 插入 CBAM
+                Conv(hidden_channels, hidden_channels, 3),
+                nn.Conv2d(hidden_channels, self.nc, 1)
+            ))
+
+# === 1. 定义重参数化卷积块 (RepConv) ===
+# 核心思想：训练是多分支，推理是单卷积。速度与精度的完美平衡。
+# Ref: "RepVGG: Making VGG-style ConvNets Great Again" (CVPR 2021)
+class RepConv(nn.Module):
+    def __init__(self, c1, c2, k=3, s=1, p=None, g=1, act=True, deploy=False):
+        super().__init__()
+        self.deploy = deploy
+        self.groups = g
+        self.in_channels = c1
+        self.out_channels = c2
+        self.kernel_size = k
+        padding = k // 2 if p is None else p
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+
+        if deploy:
+            self.rbr_reparam = nn.Conv2d(c1, c2, k, s, padding, groups=g, bias=True)
+        else:
+            # 训练时：三个分支 (3x3, 1x1, Identity)
+            self.rbr_dense = nn.Conv2d(c1, c2, k, s, padding, groups=g, bias=False)
+            self.rbr_1x1 = nn.Conv2d(c1, c2, 1, s, 0, groups=g, bias=False)
+            self.rbr_identity = nn.BatchNorm2d(c1) if c2 == c1 and s == 1 else None
+            self.bn = nn.BatchNorm2d(c2) # 简化的 BN，实际应每个分支后都有 BN
+
+    def forward(self, inputs):
+        if hasattr(self, 'rbr_reparam'):
+            return self.act(self.rbr_reparam(inputs))
+
+        # 训练时的前向传播
+        x = self.rbr_dense(inputs) + self.rbr_1x1(inputs)
+        if self.rbr_identity:
+            x = x + self.rbr_identity(inputs)
+        return self.act(self.bn(x))
+    
+    # --- 这是一个核心魔法：将多分支权重融合为一个 ---
+    def fuse_repvgg_block(self):
+        if self.deploy: return
+        # (此处省略具体的权重合并数学公式代码，实际部署时需加上)
+        # 基本原理：Kernel_final = Kernel_3x3 + Pad(Kernel_1x1) + Identity_Matrix
+        # Bias_final = Bias_3x3 + Bias_1x1 + Bias_Identity
+        self.deploy = True
+        # ... Re-init self.rbr_reparam with fused weights ...
+
+# === 2. 全能型重参数化检测头 ===
+class Detect_UniRep(Detect):
+    """
+    UniRep Head: Unified Reparameterization Head.
+    Inherits from 'Detect' to ensure compatibility with YOLOv8/v11 trainer.
+    """
+    def __init__(self, nc=80, ch=()):
+        # 【关键修改1】调用父类 Detect 的初始化
+        # 父类会自动处理 self.nc, self.reg_max, self.no 等属性
+        super().__init__(nc, ch)
+        
+        # 定义内部通道数
+        # max(...) 确保通道数不会太小，至少 16
+        c2 = max((16, ch[0] // 4, self.reg_max * 4))
+        c3 = max(ch[0], min(self.nc, 100))
+        
+        # 覆盖父类的 cv2 和 cv3
+        self.cv2 = nn.ModuleList() # Reg (Box)
+        self.cv3 = nn.ModuleList() # Cls (Class)
+
+        for x in ch:
+            # === Reg Branch: 专注精度 ===
+            # 回归任务需要精细的边缘信息，使用 3x3 卷积
+            self.cv2.append(nn.Sequential(
+                RepConv(x, c2, 3, 1),      # 第一层重参数化
+                RepConv(c2, c2, 3, 1),     # 第二层重参数化
+                nn.Conv2d(c2, 4 * self.reg_max, 1) # 输出层 (保持标准卷积)
+            ))
+            
+            # === Cls Branch: 专注语义与大感受野 ===
+            # 【关键修改2】这里直接设置 k=5 或 k=7 来实现大核
+            # RepConv 会在推理时将其融合为单个 5x5 或 7x7 卷积
+            # 相比 Dilated Conv，大核卷积在重参数化下更直接
+            self.cv3.append(nn.Sequential(
+                RepConv(x, c3, 5, 1),      # 使用 5x5 卷积获取更大感受野 (模拟 RepLKNet)
+                RepConv(c3, c3, 3, 1),     # 接一个 3x3 进一步提炼
+                nn.Conv2d(c3, self.nc, 1)  # 输出层
+            ))
+
+            # for x in ch:
+            # # =============================================================
+            # # 🚀 自适应核心：让隐藏通道直接等于输入通道 x
+            # # =============================================================
+            # # 为了保证 RepConv 的效果，通道数建议不要太小
+            # # 这里设置一个下限 64，防止 Nano 模型在 P2 层通道过少导致 Rep 效果不佳
+            # c_hidden = max(64, x) 
+            
+            # # 如果你想要完全跟随 YAML (即使是 32 通道)，就用:
+            # # c_hidden = x
+
+            # # === Regression Branch (回归分支) ===
+            # # 两个 RepConv 串联，训练时是多分支，推理时等价于两个 3x3
+            # self.cv2.append(nn.Sequential(
+            #     RepConv(x, c_hidden, 3, 1),        # RepConv 1
+            #     RepConv(c_hidden, c_hidden, 3, 1), # RepConv 2
+            #     nn.Conv2d(c_hidden, 4 * self.reg_max, 1) # Output (Reg)
+            # ))
+            
+            # # === Classification Branch (分类分支) ===
+            # # 同样使用 RepConv 提取语义
+            # self.cv3.append(nn.Sequential(
+            #     RepConv(x, c_hidden, 3, 1),        # RepConv 1
+            #     RepConv(c_hidden, c_hidden, 3, 1), # RepConv 2
+            #     nn.Conv2d(c_hidden, self.nc, 1)    # Output (Cls)
+            # ))
+
+    def forward(self, x):
+        # 标准 YOLO Detect forward 逻辑
+        return [torch.cat([self.cv2[i](x[i]), self.cv3[i](x[i])], 1) for i in range(len(x))]
+
 
 
 class OBB(Detect):

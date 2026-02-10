@@ -1,11 +1,5 @@
 # 忽略所有 Python 编译缓存
 __pycache__/
-*.py[cod]
-
-# 忽略深度学习训练生成的模型文件 (因为太大了，通常存本地)
-*.pth
-*.onnx
-*.weights
 
 
 
@@ -24,17 +18,10 @@ Thumbs.db
 
 
 
-*.log
-
-# 忽略权重文件
-*.pt
-*.pth
-*.onnx
-*.weights
 
 # 忽略数据集和训练结果
 datasets/
-
+giveup/
 build/
 dist/
 ultralytics/data/
@@ -42,7 +29,6 @@ VISO/
 VisDrone/
 USOD/
 data/
-runs/
 
 data/*.zip
 data/*.tar
@@ -55,6 +41,4 @@ __pycache__/
 
 mmyolo-main/*.zip
 *.tar.gz
-*.pth
-*.onnx
 VISO.zip

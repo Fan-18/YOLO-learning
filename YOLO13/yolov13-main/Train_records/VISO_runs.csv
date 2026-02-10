@@ -1,9 +1,0 @@
-﻿实验 ID,改进描述 (Modification),Backbone,Neck,网络模型,预训练权重,输入分辨率,Epochs,Best_Epoch,Batch Size,优化器 (Optimizer),学习率 (lr),参数量-Params ,计算量-GFLOPs,训练用时（h）,Precision,Recall,mAP50,mAP50:95,mAP_small,推理帧率-FPS ,Context (上下文信息),Anchor 策略,损失函数,结果路径,Failed_Reason
-1_yolo11n_VISO_1024,baseline,,,yolo11n.yaml,yolo11n.pt,1024,133（300）,33,32,auto,0.01,"2,590,035",6.4,2.398,0.476,0.22,0.256,0.0377,,,,,,/home/jack/11/1027/YOLO13/yolov13-main/runs/VISO_Detection/car/1_yolo11n_VISO_1024,
-2_yolo11n_p2&p5_VISO_1024,增加P2检测头,,,yolo11-p2&p5.yaml,yolo11n.pt,1024,300,,,auto,,,,,,,,,,,,,,,
-,,,,,,,300,,,auto,0.01,,,,,,,,,,,,,,
-,,,,,,,300,,,auto,0.01,,,,,,,,,,,,,,
-,,,,,,,300,,,auto,0.01,,,,,,,,,,,,,,
-,,,,,,,300,,,auto,0.01,,,,,,,,,,,,,,
-,,,,,,,300,,,auto,0.01,,,,,,
-,,,,,,,500,,,auto,0.01,,,,,,

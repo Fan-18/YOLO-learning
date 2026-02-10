@@ -24,8 +24,8 @@ def main():
     # Ultralytics 会自动匹配能用的权重，不匹配的(如FEM模块)会随机初始化，这是正常的 Transfer Learning。
     # model = YOLO(r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/models/v13/yolov13-p2-nop5v2.yaml')
 
-    # model = YOLO(r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/models/11/yolo11-p2-FEM-SPDv2.yaml')
-    model = YOLO('/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone/30_yolo11n_p2_FEM_SPD_yamlv2_det_VisDrone_1024_bc8/weights/best.pt')
+    model = YOLO(r'/home/jack/11/1027/YOLO13/yolov13-main/ultralytics/cfg/models/11/yolo11-p2.yaml')
+    # model = YOLO('/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone/30_yolo11n_p2_FEM_SPD_yamlv2_det_VisDrone_1024_bc8/weights/best.pt')
     model.load("yolo11n.pt")
 
     # 4. 训练配置
@@ -48,12 +48,13 @@ def main():
         amp=True,       # 如果你的 FEM 模块容易 NaN，保持 False；否则建议 True 以提速
         
         resume=True,   # 从上次中断处继续训练
+        save_json=True,
 
         patience=50,
         project='/home/jack/11/1027/YOLO13/yolov13-main/runs/VisDrone',
         # project='/home/jack/11/1027/YOLO13/yolov13-main/runs/YOLOv13_VisDrone',
 
-        name='30_yolo11n_p2_FEM_SPD_yamlv2_det_VisDrone_1024_bc8' # 改名标记 batch size
+        name='36_yolo11n_p2_Det_VisDrone_1024_bc8' # 改名标记 batch size
 
         
     )
@@ -62,4 +63,4 @@ if __name__ == '__main__':
     # 所有的逻辑都要包在这里面！
     main()
 
-# python z-train/detect_train.py | tee train_log.txt
+# python z-train/detect_train.py | tee p2_Det_train_log.txt

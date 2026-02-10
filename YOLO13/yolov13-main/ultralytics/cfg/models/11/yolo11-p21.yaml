@@ -56,5 +56,5 @@ head:
   # - [[14, 17, 20], 1, Detect_SmallObj, [nc]] # 21
   # - [[14, 17, 20], 1, Detect_Decoupled_SE, [nc]] # 21
   # - [[14, 17, 20], 1, Detect_Decoupled_CBAM, [nc]] # 21
-  # - [[14, 17, 20], 1, Detect_UniRep, [nc]] # 21
-  - [[14, 17, 20], 1, Detect_TaskSpecific_LK, [nc]] # 21
+  - [[14, 17, 20], 1, Detect_UniRep, [nc]] # 21
+  # - [[14, 17, 20], 1, Detect_TaskSpecific_LK, [nc]] # 21

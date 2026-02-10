@@ -50,5 +50,7 @@ head:
   - [-1, 2, C3k2, [512, False]]    # 22 (P4-Output) 
 
   # 最终仅检测 P2, P3, P4
-  # - [[16, 19, 22], 1, Detect, [nc]] # 23
-  - [[16, 19, 22], 1, Detect_SmallObj, [nc]] # 23
+  - [[16, 19, 22], 1, Detect, [nc]] # 23
+  # - [[16, 19, 22], 1, Detect_SmallObj, [nc]] # 23
+  # - [[16, 19, 22], 1, Detect_Decoupled_SE, [nc]] # 23
+  # - [[16, 19, 22], 1, Detect_Decoupled_CBAM, [nc]] # 23

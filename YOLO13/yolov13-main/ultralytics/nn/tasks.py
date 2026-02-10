@@ -11,8 +11,9 @@ import thop
 import torch
 import torch.nn as nn
 
-from ultralytics.nn.modules.head import  Detect_SmallObj 
-from ultralytics.nn.modules.ffca import (FEM, FFM_Concat2, FFM_Concat3, Concat2, Concat3, SCAM, LCBHAM, SPDConv, CSFA, PatchAttention )
+from ultralytics.nn.modules.head import  (Detect_SmallObj, Detect_YOLOX, Detect_Decoupled_SE, Detect_Decoupled_CBAM, Detect_UniRep, Detect_TaskSpecific_LK )
+
+from ultralytics.nn.modules.ffca import (FEM, FFM_Concat2, FFM_Concat3, Concat2, Concat3, SCAM, LCBHAM, SPDConv, CSFA, PatchAttention, FEM_v2 )
 
 from ultralytics.nn.modules import (
     AIFI,
@@ -1024,6 +1025,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             DSC3k2,
             DSConv,
             FEM,
+            FEM_v2,
+
             LCBHAM,
             SPDConv
         }:
@@ -1116,11 +1119,11 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect, Detect_SmallObj}:
+        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect, Detect_SmallObj, Detect_YOLOX, Detect_Decoupled_SE, Detect_Decoupled_CBAM, Detect_UniRep, Detect_TaskSpecific_LK }:
             args.append([ch[x] for x in f])
             if m is Segment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
-            if m in {Detect, Segment, Pose, OBB, Detect_SmallObj}:
+            if m in {Detect, Segment, Pose, OBB, Detect_SmallObj, Detect_YOLOX,  Detect_Decoupled_SE, Detect_Decoupled_CBAM, Detect_UniRep, Detect_TaskSpecific_LK}:
                 m.legacy = legacy
         elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
             args.insert(1, [ch[x] for x in f])

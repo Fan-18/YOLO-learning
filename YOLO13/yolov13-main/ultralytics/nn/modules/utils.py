@@ -12,6 +12,11 @@ from torch.nn.init import uniform_
 
 __all__ = "multi_scale_deformable_attn_pytorch", "inverse_sigmoid"
 
+def make_divisible(x, divisor):
+    # Returns nearest x divisible by divisor
+    if isinstance(divisor, torch.Tensor):
+        divisor = int(divisor.max())  # to int
+    return math.ceil(x / divisor) * divisor
 
 def _get_clones(module, n):
     """Create a list of cloned modules from the given module."""
